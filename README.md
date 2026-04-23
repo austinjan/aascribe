@@ -5,6 +5,7 @@ Early-stage Go CLI for project memory, recall, and indexing.
 ## Docs
 
 - [Quick Start](./quick_start.md)
+- [Configuration](./docs/configuration.md)
 - [Usage Guide](./docs/USAGE.md)
-- [AI Output Shapes](./docs/aascribe_ai_output_shapes.md)
+- [AI Output Shapes](./docs/reference/aascribe_ai_output_shapes.md)
 - [Bootstrap Plan](./docs/plans/bootstrap-plan.md)

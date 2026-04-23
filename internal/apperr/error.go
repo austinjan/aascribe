@@ -42,6 +42,19 @@ func StoreNotFound(path string) *Error {
 	return newError("STORE_NOT_FOUND", ExitStoreNotInitialized, "No store at %s. Run `aascribe init`.", path)
 }
 
+func ConfigNotFound(path string) *Error {
+	return newError("CONFIG_NOT_FOUND", ExitGeneralRuntimeError, "No config file at %s.", path)
+}
+
+func InvalidConfig(path string, problem string, args ...any) *Error {
+	rendered := fmt.Sprintf(problem, args...)
+	return newError("INVALID_CONFIG", ExitGeneralRuntimeError, "Invalid config at %s: %s", path, rendered)
+}
+
+func MissingSecret(envName string) *Error {
+	return newError("MISSING_SECRET", ExitGeneralRuntimeError, "Environment variable %s is not set or is empty.", envName)
+}
+
 func NotImplemented(command string) *Error {
 	return newError("NOT_IMPLEMENTED", ExitGeneralRuntimeError, "The command `%s` is not implemented yet.", command)
 }

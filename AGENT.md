@@ -42,6 +42,8 @@ Guidance for coding agents working in this repository.
   - `forget`
 - Keep output formatting separated from core command logic where possible.
 - Design for both human-readable and agent-friendly operation.
+- When implementing features, add enough structured logging for debugging and later analysis.
+- Keep user-facing command output separate from logs; logs should go to stderr and/or dedicated log sinks, not stdout JSON payloads.
 
 ## Current Repository Reality
 

@@ -1,5 +1,9 @@
 # Quick Start
 
+See also:
+
+- [Configuration](./docs/configuration.md)
+
 ## Build A Release Binary
 
 Build the CLI with:

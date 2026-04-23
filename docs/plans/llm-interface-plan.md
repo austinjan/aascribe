@@ -5,7 +5,7 @@
 Implement a first LLM subsystem before `describe` or `index`, with a narrow MVP scope:
 
 - Gemini is the only supported provider
-- API credentials are loaded from a checked-in user-managed config file at `<store>/config.toml`
+- API credentials are resolved using a store-local config file plus environment-variable secret loading
 - the LLM layer exposes a stable internal interface that later commands can reuse
 - `describe` and `index` will depend on this interface rather than talking to Gemini directly
 
@@ -28,7 +28,7 @@ The goal of this phase is not to implement all AI features. It is to create one 
   - this keeps runtime configuration co-located with the store already created by `aascribe init`
 - Add a new config section for the LLM layer:
   - provider name
-  - Gemini API key
+  - Gemini API key env-var name
   - model name
   - timeout settings
   - optional max token / temperature style tuning fields only if Gemini support requires them for MVP
@@ -41,8 +41,8 @@ The goal of this phase is not to implement all AI features. It is to create one 
 - Normalize Gemini responses into internal structs rather than leaking provider-specific JSON into callers.
 - Fail cleanly when config or credentials are missing:
   - no panic
-  - no silent fallback to environment variables in MVP
-  - return a structured runtime error that explains the expected config location and keys
+  - no silent fallback to unrelated environment variables in MVP
+  - return a structured runtime error that explains the expected config location, keys, and secret env var
 
 ## Public Interfaces And Config Contract
 
@@ -55,14 +55,15 @@ Recommended MVP config shape:
 [llm]
 provider = "gemini"
 model = "gemini-2.5-flash"
-api_key = "your-gemini-api-key"
+api_key_env = "GEMINI_API_KEY"
 timeout_seconds = 30
 ```
 
 - `provider` is required and must equal `gemini`
 - `model` is required for explicitness; do not hide model choice in code only
-- `api_key` is required in the config file for MVP
+- `api_key_env` is required in the config file for MVP
 - `timeout_seconds` is optional in spirit but should be written and supported as a first-class setting
+- the actual API key is loaded from the named environment variable, not from raw config by default
 
 Internal interface shape to build toward:
 
@@ -102,6 +103,7 @@ Recommended internal summary response shape:
 
 - Missing `<store>/config.toml` should return a clear config-not-found error.
 - Missing `[llm]` section or missing required keys should return a clear invalid-config error.
+- Missing or empty env var referenced by `api_key_env` should return a clear missing-secret error.
 - Invalid Gemini credentials should return a provider-auth error.
 - Network timeouts and transport failures should return retryable runtime errors.
 - Provider response parsing failures should return provider-response errors and preserve as much raw context as is safe for debugging.
@@ -115,9 +117,11 @@ Recommended internal summary response shape:
   - missing `[llm]`
   - unsupported provider
   - valid Gemini config
+  - missing `api_key_env`
 - Client construction tests:
   - valid config creates a Gemini client
   - unsupported provider is rejected
+  - missing secret env var is rejected
 - Request/response tests:
   - Gemini request serialization matches the expected API shape
   - Gemini response parsing handles normal success payloads
@@ -141,7 +145,7 @@ Recommended internal summary response shape:
 ## Assumptions
 
 - MVP supports Gemini only
-- API keys are stored in `<store>/config.toml`, not environment variables
+- `<store>/config.toml` stores `api_key_env`, not the raw secret by default
 - The existing store path resolution logic remains the single way to locate config
 - The first model default in docs/examples is `gemini-2.5-flash`
 - This phase focuses on internal interface and config plumbing, not on implementing `describe` or `index` yet
