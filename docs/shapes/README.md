@@ -16,6 +16,9 @@ This directory is the checked-in source of truth for `aascribe` command `OutputS
 - `FileDescription.schema.json`
 - `ForgetResult.schema.json`
 - `IndexedPathNode.schema.json`
+- `LogClearResult.schema.json`
+- `LogExportResult.schema.json`
+- `LogPathResult.schema.json`
 - `MemoryEntryDetail.schema.json`
 - `MemoryEntryList.schema.json`
 - `MemoryEntrySummary.schema.json`

@@ -201,6 +201,12 @@ The first implementation should keep the catalog small and reusable.
 
 - `StoreInitResult`
   Result of initializing or reinitializing a store.
+- `LogPathResult`
+  Result of resolving the active log file path.
+- `LogExportResult`
+  Result of exporting the active log file.
+- `LogClearResult`
+  Result of clearing the active log file.
 - `FileDescription`
   Single-file summary payload for `describe`.
 - `RememberResult`
@@ -297,6 +303,9 @@ These examples are illustrative. They do not claim the current implementation al
 | Command | OutputShape | Notes |
 |---|---|---|
 | `init` | `StoreInitResult` | Store creation or reinitialization result. |
+| `logs path` | `LogPathResult` | Return the active log file path. |
+| `logs export --output <path>` | `LogExportResult` | Export the active log file to a target path. |
+| `logs clear --force` | `LogClearResult` | Clear the active log file. |
 | `index <path>` | `PathIndexTree` | Indexed directory tree and file summaries. |
 | `describe <file>` | `FileDescription` | Single file summary payload. |
 | `remember` | `RememberResult` | Newly stored short-term memory metadata. |

@@ -30,8 +30,8 @@ func InvalidArguments(message string, args ...any) *Error {
 	return newError("INVALID_ARGUMENTS", ExitInvalidArguments, message, args...)
 }
 
-func HomeDirectoryUnavailable() *Error {
-	return newError("HOME_DIRECTORY_UNAVAILABLE", ExitGeneralRuntimeError, "Could not determine a home directory for the default store path.")
+func WorkingDirectoryUnavailable() *Error {
+	return newError("WORKING_DIRECTORY_UNAVAILABLE", ExitGeneralRuntimeError, "Could not determine the current working directory for the default store path.")
 }
 
 func StoreAlreadyExists(path string) *Error {
@@ -53,6 +53,10 @@ func InvalidConfig(path string, problem string, args ...any) *Error {
 
 func MissingSecret(envName string) *Error {
 	return newError("MISSING_SECRET", ExitGeneralRuntimeError, "Environment variable %s is not set or is empty.", envName)
+}
+
+func LogFileNotFound(path string) *Error {
+	return newError("LOG_FILE_NOT_FOUND", ExitNotFound, "No log file at %s.", path)
 }
 
 func NotImplemented(command string) *Error {

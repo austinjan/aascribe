@@ -3,6 +3,7 @@
 See also:
 
 - [Configuration](./docs/configuration.md)
+- [Logging](./docs/logging.md)
 
 ## Build A Release Binary
 

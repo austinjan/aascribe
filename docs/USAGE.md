@@ -1,8 +1,9 @@
 # aascribe Usage
 
 Related docs:
-- [aascribe_ai_output_shapes.md](aascribe_ai_output_shapes.md)
+- [reference/aascribe_ai_output_shapes.md](reference/aascribe_ai_output_shapes.md)
 - [shapes/README.md](shapes/README.md)
+- [logging.md](logging.md)
 
 Complete command and flag reference for `aascribe`.
 
@@ -12,6 +13,7 @@ Complete command and flag reference for `aascribe`.
 - [Exit codes](#exit-codes)
 - [Commands](#commands)
   - [init](#init)
+  - [logs](#logs)
   - [index](#index)
   - [describe](#describe)
   - [remember](#remember)
@@ -140,6 +142,89 @@ aascribe init --store ./project-mem
     "command": "init",
     "duration_ms": 4,
     "store": "/Users/you/.aascribe"
+  }
+}
+```
+
+---
+
+### `logs`
+
+Inspect and manage the active log file for the current store.
+
+```
+aascribe logs <subcommand> [flags]
+```
+
+Subcommands:
+
+- `path`
+  Return the resolved active log file path.
+- `export --output <path>`
+  Copy the current log file to another location.
+- `clear --force`
+  Truncate the current log file.
+
+**Examples**
+
+```bash
+aascribe --store ./project-mem logs path
+aascribe --store ./project-mem logs export --output ./aascribe-debug.log
+aascribe --store ./project-mem logs clear --force
+```
+
+**OutputShape:** `LogPathResult` for `logs path`
+
+Example `logs path` output:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "path": "/Users/you/project-mem/logs/aascribe.log"
+  },
+  "meta": {
+    "command": "logs",
+    "duration_ms": 1,
+    "store": "/Users/you/project-mem"
+  }
+}
+```
+
+**OutputShape:** `LogExportResult` for `logs export`
+
+Example `logs export` output:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "source_path": "/Users/you/project-mem/logs/aascribe.log",
+    "output_path": "/Users/you/aascribe-debug.log"
+  },
+  "meta": {
+    "command": "logs",
+    "duration_ms": 2,
+    "store": "/Users/you/project-mem"
+  }
+}
+```
+
+**OutputShape:** `LogClearResult` for `logs clear`
+
+Example `logs clear` output:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "path": "/Users/you/project-mem/logs/aascribe.log",
+    "cleared": true
+  },
+  "meta": {
+    "command": "logs",
+    "duration_ms": 1,
+    "store": "/Users/you/project-mem"
   }
 }
 ```

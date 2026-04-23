@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/LogPathResult",
+  "title": "LogPathResult",
+  "description": "Result payload for aascribe logs path.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "string"
+    }
+  },
+  "required": ["path"]
+}

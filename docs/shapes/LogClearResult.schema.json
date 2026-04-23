@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/LogClearResult",
+  "title": "LogClearResult",
+  "description": "Result payload for aascribe logs clear.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "cleared": {
+      "type": "boolean"
+    }
+  },
+  "required": ["path", "cleared"]
+}

@@ -38,6 +38,22 @@ type InitCommand struct {
 
 func (c InitCommand) Name() string { return "init" }
 
+type LogsPathCommand struct{}
+
+func (c LogsPathCommand) Name() string { return "logs" }
+
+type LogsExportCommand struct {
+	Output string
+}
+
+func (c LogsExportCommand) Name() string { return "logs" }
+
+type LogsClearCommand struct {
+	Force bool
+}
+
+func (c LogsClearCommand) Name() string { return "logs" }
+
 type IndexCommand struct {
 	Path        string
 	Depth       int
@@ -171,6 +187,7 @@ Global flags:
 
 Commands:
   init
+  logs
   index
   describe
   remember
@@ -256,6 +273,8 @@ func parseSubcommand(name string, args []string) (Command, error) {
 	switch name {
 	case "init":
 		return parseInit(args)
+	case "logs":
+		return parseLogs(args)
 	case "index":
 		return parseIndex(args)
 	case "describe":
@@ -274,6 +293,50 @@ func parseSubcommand(name string, args []string) (Command, error) {
 		return parseForget(args)
 	default:
 		return nil, apperr.InvalidArguments("Unknown subcommand %s.", name)
+	}
+}
+
+func parseLogs(args []string) (Command, error) {
+	if len(args) == 0 {
+		return nil, apperr.InvalidArguments("logs requires a subcommand: path, export, or clear.")
+	}
+
+	switch args[0] {
+	case "path":
+		if len(args[1:]) != 0 {
+			return nil, apperr.InvalidArguments("logs path does not accept extra arguments.")
+		}
+		return LogsPathCommand{}, nil
+	case "export":
+		fs := newFlagSet("logs export")
+		var output string
+		fs.StringVar(&output, "output", "", "")
+		if err := fs.Parse(args[1:]); err != nil {
+			return nil, err
+		}
+		if output == "" {
+			return nil, apperr.InvalidArguments("logs export requires --output <path>.")
+		}
+		if len(fs.Args()) != 0 {
+			return nil, apperr.InvalidArguments("logs export does not accept positional arguments.")
+		}
+		return LogsExportCommand{Output: output}, nil
+	case "clear":
+		fs := newFlagSet("logs clear")
+		var force bool
+		fs.BoolVar(&force, "force", false, "")
+		if err := fs.Parse(args[1:]); err != nil {
+			return nil, err
+		}
+		if len(fs.Args()) != 0 {
+			return nil, apperr.InvalidArguments("logs clear does not accept positional arguments.")
+		}
+		if !force {
+			return nil, apperr.InvalidArguments("logs clear requires --force.")
+		}
+		return LogsClearCommand{Force: true}, nil
+	default:
+		return nil, apperr.InvalidArguments("Unknown logs subcommand %s.", args[0])
 	}
 }
 

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/LogExportResult",
+  "title": "LogExportResult",
+  "description": "Result payload for aascribe logs export.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "source_path": {
+      "type": "string"
+    },
+    "output_path": {
+      "type": "string"
+    }
+  },
+  "required": ["source_path", "output_path"]
+}

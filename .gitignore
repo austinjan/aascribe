@@ -1,2 +1,36 @@
-/target
-/bin
+# Go build outputs
+/bin/
+/dist/
+/build/
+/out/
+
+# Local compiled binaries
+/aascribe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test and coverage outputs
+*.test
+*.out
+coverage.out
+cover.out
+
+# Workspace-local app data
+/data/
+/target/
+
+# Dependency/vendor directories when used locally
+/vendor/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Environment files
+.env
+.env.*

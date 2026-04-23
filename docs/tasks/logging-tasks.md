@@ -1,5 +1,17 @@
 # Logging And Debugging Tasks
 
+Status: Partially Completed
+
+Completed in current branch:
+
+- added a shared logger package
+- wired `--verbose` to debug logging
+- kept logs separate from stdout command output
+- added stderr logging plus store-local file logging at `<store>/logs/aascribe.log`
+- added `logs path`, `logs export`, and `logs clear`
+- added logger and log-command tests
+- added a user-facing logging guide
+
 Task breakdown for adding a logging system to `aascribe` and making detailed logs a default engineering expectation for future features.
 
 ## Goal
@@ -34,11 +46,15 @@ The logging system should support:
   - error
 - Prefer structured key/value logging over ad hoc free-form strings
 
+Status: Completed
+
 ### Task 1.2: Wire `--verbose` to logging behavior
 
 - Make `--verbose` actually enable debug-level logs
 - In non-verbose mode, keep logs minimal
 - Do not change stdout command payload behavior
+
+Status: Completed
 
 ### Task 1.3: Define default log destination
 
@@ -50,6 +66,31 @@ MVP recommendation:
 Future-friendly extension:
 
 - optional file logging under `<store>/logs/`
+
+Status: Completed for stderr + store-local file logging
+
+### Task 1.4: Add log management commands
+
+Plan user-facing commands for:
+
+- exporting the current log file
+- clearing the current log file
+- returning the active log file path
+
+Recommended command shapes:
+
+- `aascribe [global flags] logs path`
+- `aascribe [global flags] logs export [--output <path>]`
+- `aascribe [global flags] logs clear [--force]`
+
+Behavior expectations:
+
+- `logs path` returns the resolved log file path in both text and JSON modes
+- `logs export` copies or writes the current log file to a target path
+- `logs clear` truncates the active log file without breaking future logging
+- these commands should respect the current store path resolution rules
+
+Status: Completed
 
 ## Phase 2: Command Lifecycle Logs
 
@@ -64,11 +105,15 @@ For each command execution, log:
 - finish status
 - duration
 
+Status: Completed
+
 ### Task 2.2: Log top-level failures
 
 - Record the error code and failure stage
 - Keep the user-facing error message clean
 - Include enough context for debugging without exposing secrets
+
+Status: Completed
 
 ## Phase 3: Config And Secret Logs
 
@@ -149,6 +194,8 @@ Requirements:
 - log file creation should not be mandatory for command success
 - file logging should be additive to stderr, not replace it blindly
 
+Status: Completed for `<store>/logs/aascribe.log`
+
 ### Task 5.2: Rotation strategy
 
 Do not implement rotation in the first pass unless trivial.
@@ -157,6 +204,16 @@ But leave room for:
 
 - size-based rotation
 - date-based rotation
+
+### Task 5.3: Define active log path resolution
+
+- Standard active log path:
+  - `<store>/logs/aascribe.log`
+- `logs path` should expose this resolved path directly
+- `logs export` and `logs clear` should operate on this same resolved path
+- if file logging is disabled or the file does not exist yet, commands should return a clear structured result or error
+
+Status: Completed
 
 ## Phase 6: Documentation
 
@@ -168,6 +225,11 @@ Add a user-facing logging section that explains:
 - what `--verbose` does
 - what kinds of details are logged
 - what will not be logged for security reasons
+- how to find the active log file
+- how to export logs
+- how to clear logs
+
+Status: Completed
 
 ### Task 6.2: Add implementation guidance
 
@@ -185,16 +247,29 @@ Document for contributors that:
 - stdout output remains unchanged
 - stderr logging does not corrupt JSON output
 
+Status: Completed
+
 ### Task T2: Security tests
 
 - secrets are not emitted in logs
 - config secret values are redacted or omitted completely
+
+Status: Completed for structured logger redaction tests
 
 ### Task T3: Feature log tests
 
 - config loading emits expected debug events
 - command lifecycle logs are present
 - future `describe`/`index` logging hooks can be asserted in tests
+
+### Task T4: Log command tests
+
+- `logs path` returns the expected file path
+- `logs export` writes a copy of the log file
+- `logs clear` truncates the log file safely
+- these commands do not corrupt stdout JSON response handling
+
+Status: Completed
 
 ## Acceptance Criteria
 
@@ -204,6 +279,7 @@ The first acceptable logging implementation should:
 - make `--verbose` meaningful
 - keep logs separate from stdout command payloads
 - log command lifecycle and config resolution
+- provide commands to return, export, and clear the active log file
 - establish a project rule that new features must include useful debug/analyze logs
 
 ## Out Of Scope For First Logging Milestone

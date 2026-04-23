@@ -10,7 +10,7 @@ import (
 
 const layoutVersion = "bootstrap-v1"
 
-var managedDirectories = []string{"short_term", "long_term", "index", "cache"}
+var managedDirectories = []string{"short_term", "long_term", "index", "cache", "logs"}
 var managedFiles = []string{"layout.json"}
 
 type InitOutcome struct {
@@ -25,11 +25,11 @@ func ResolveStorePath(explicit string) (string, error) {
 	if envPath := os.Getenv("AASCRIBE_STORE"); envPath != "" {
 		return envPath, nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "", apperr.HomeDirectoryUnavailable()
+	workingDir, err := os.Getwd()
+	if err != nil || workingDir == "" {
+		return "", apperr.WorkingDirectoryUnavailable()
 	}
-	return filepath.Join(home, ".aascribe"), nil
+	return filepath.Join(workingDir, "data", "memory"), nil
 }
 
 func InitializeStore(path string, force bool) (*InitOutcome, error) {
@@ -69,6 +69,7 @@ func InitializeStore(path string, force bool) (*InitOutcome, error) {
 			"long_term":  "long_term",
 			"index":      "index",
 			"cache":      "cache",
+			"logs":       "logs",
 		},
 	}
 	layoutBytes, err := json.MarshalIndent(layoutDoc, "", "  ")

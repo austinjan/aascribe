@@ -96,6 +96,10 @@ func normalizeError(err error) *apperr.Error {
 	return apperr.IOError("%s", err.Error())
 }
 
+func ErrorCode(err error) string {
+	return normalizeError(err).Code
+}
+
 func writeJSON(w io.Writer, payload any) error {
 	bytes, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

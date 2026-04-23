@@ -107,7 +107,7 @@ EOF
 
 export GEMINI_API_KEY="your-real-key"
 
-./bin/aascribe describe ./main.go --store ./project-mem
+./bin/aascribe --store ./project-mem describe ./main.go
 ```
 
 ## How Skills Should Use `aascribe`
@@ -122,8 +122,8 @@ Skills should:
 Examples:
 
 ```bash
-aascribe describe ./file.go --store ./project-mem
-aascribe index . --store ./project-mem --depth 2
+aascribe --store ./project-mem describe ./file.go
+aascribe --store ./project-mem index . --depth 2
 ```
 
 ## Environment Overrides
