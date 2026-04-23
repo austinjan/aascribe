@@ -2,6 +2,7 @@
 
 Related docs:
 - [aascribe_ai_output_shapes.md](aascribe_ai_output_shapes.md)
+- [shapes/README.md](shapes/README.md)
 
 Complete command and flag reference for `aascribe`.
 
@@ -114,7 +115,7 @@ aascribe init
 aascribe init --store ./project-mem
 ```
 
-**Output shape:** `StoreInitResult`
+**OutputShape:** `StoreInitResult`
 
 **Bootstrap-managed layout**
 
@@ -171,7 +172,9 @@ aascribe index . --no-summary           # structure-only, fast
 aascribe index . --refresh              # force re-summarize
 ```
 
-**Output shape**
+**OutputShape:** `PathIndexTree`
+
+**Output**
 
 ```json
 {
@@ -220,6 +223,8 @@ aascribe describe ./src/poll.rs
 aascribe describe ./src/poll.rs --length long --focus "FOCAS retry logic"
 ```
 
+**OutputShape:** `FileDescription`
+
 ---
 
 ### `remember`
@@ -251,6 +256,8 @@ echo "bbpollsvc crashes on malformed DNP3 frames" \
 aascribe remember --source ./src/poll.rs --tag refactor \
   "poll loop should be split into producer/consumer"
 ```
+
+**OutputShape:** `RememberResult`
 
 **Output**
 
@@ -294,7 +301,9 @@ aascribe consolidate --session sess_20260423_0915
 aascribe consolidate --tag nimbl --topic "FOCAS protocol handling"
 ```
 
-**Output shape**
+**OutputShape:** `ConsolidationResult`
+
+**Output**
 
 ```json
 {
@@ -343,7 +352,9 @@ aascribe recall "deployment issues" --tier long --limit 5
 aascribe recall "bug" --tag nimbl --since 7d --include-source
 ```
 
-**Output shape**
+**OutputShape:** `MemoryRecallResult`
+
+**Output**
 
 ```json
 {
@@ -384,6 +395,8 @@ aascribe list [flags]
 | `--limit <N>` | `50` | Maximum rows |
 | `--order asc\|desc` | `desc` | Sort by creation time |
 
+**OutputShape:** `MemoryEntryList`
+
 ---
 
 ### `show`
@@ -397,6 +410,8 @@ aascribe show <id>
 | Flag | Description |
 |---|---|
 | `<id>` | Memory id (positional, required). Accepts `stm_...` or `ltm_...` |
+
+**OutputShape:** `MemoryEntryDetail`
 
 ---
 
@@ -412,6 +427,8 @@ aascribe forget <id> [--force]
 |---|---|
 | `<id>` | Memory id to delete |
 | `--force` | Skip confirmation (required in non-interactive mode) |
+
+**OutputShape:** `ForgetResult`
 
 ---
 

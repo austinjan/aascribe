@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/RememberResult",
+  "title": "RememberResult",
+  "description": "Result payload for storing a short-term memory entry.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "session": {
+      "type": "string"
+    },
+    "stored_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": ["id", "session", "stored_at"]
+}

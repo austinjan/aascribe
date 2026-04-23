@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/ForgetResult",
+  "title": "ForgetResult",
+  "description": "Result payload for deleting one memory entry.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "deleted": {
+      "type": "boolean"
+    }
+  },
+  "required": ["id", "deleted"]
+}

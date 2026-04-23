@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/MemoryRecallResult",
+  "title": "MemoryRecallResult",
+  "description": "Result payload for aascribe recall.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "query": {
+      "type": "string"
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "$ref": "MemoryRecallHit.schema.json"
+      }
+    }
+  },
+  "required": ["query", "results"]
+}

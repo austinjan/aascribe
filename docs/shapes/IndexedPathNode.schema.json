@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/IndexedPathNode",
+  "title": "IndexedPathNode",
+  "description": "One file or directory node inside an indexed tree.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["file", "dir"]
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "hash": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "summarized_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "children": {
+      "type": "array",
+      "items": {
+        "$ref": "IndexedPathNode.schema.json"
+      }
+    }
+  },
+  "required": ["path", "type"]
+}

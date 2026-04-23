@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/PathIndexTree",
+  "title": "PathIndexTree",
+  "description": "Root payload for aascribe index results.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "root": {
+      "type": "string"
+    },
+    "tree": {
+      "$ref": "IndexedPathNode.schema.json"
+    }
+  },
+  "required": ["root", "tree"]
+}

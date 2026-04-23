@@ -1,7 +1,7 @@
 # aascribe AI Output Shapes
 
 **Status:** Draft v1  
-**Related docs:** [USAGE.md](USAGE.md)  
+**Related docs:** [USAGE.md](USAGE.md), [shapes/README.md](shapes/README.md)  
 **Purpose:** Define how `OutputShape` values for `aascribe` commands map to stable machine-readable schemas for the `data` payload returned by the CLI.
 
 ---
@@ -15,6 +15,8 @@ This document defines a reusable output-shape model so `aascribe` can:
 1. give each command a stable symbolic result type
 2. reuse shapes across commands where the logical data is the same
 3. evolve command payloads without breaking AI clients unexpectedly
+
+For v1, the source of truth for shape definitions is the checked-in JSON Schema set under [`docs/shapes/`](shapes/README.md).
 
 ---
 
@@ -159,6 +161,12 @@ Preferred when known:
 - `aascribe` does not need to normalize every command result in one big-bang change.
 - A command may initially publish an `OutputShape` that matches its current payload as documented today.
 - Later cleanup may consolidate or refactor shapes, but compatibility must be preserved or a new shape name must be introduced.
+
+### 5.7 Schema source of truth
+
+- The authoritative shape definitions live as checked-in JSON Schema files under [`docs/shapes/`](shapes/README.md).
+- `USAGE.md` command sections must reference these shapes by name.
+- If Rust types later generate schemas, the generated output must either replace this directory explicitly as the new source of truth or stay byte-for-byte aligned with it.
 
 ---
 
@@ -383,7 +391,7 @@ Start with:
 
 1. define a small core shape catalog for the documented commands
 2. attach `OutputShape` to each concrete CLI command
-3. keep schema definitions checked in as JSON Schema fragments or derive them from typed Rust structs
+3. keep schema definitions checked in under `docs/shapes/` as JSON Schema files
 4. add tests ensuring every user-facing command has a valid `OutputShape`
 
 ### 10.2 Validation
@@ -408,8 +416,7 @@ Recommended checks:
 
 The following are still implementation choices, not settled by this document:
 
-- whether schemas are authored directly as JSON Schema files or generated from Rust types
-- whether schema references use `#/shapes/...` or another stable path convention
+- whether schema references should continue to use local file references or move to a stable manifest path convention
 - whether `list` and `recall` should share more underlying entity shapes beyond the obvious memory-entry fields
 - whether `StoreInitResult` should expose layout details such as created directories or keep that internal
 

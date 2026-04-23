@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/MemoryEntryList",
+  "title": "MemoryEntryList",
+  "description": "List wrapper for memory-entry results.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "MemoryEntrySummary.schema.json"
+      }
+    }
+  },
+  "required": ["count", "items"]
+}

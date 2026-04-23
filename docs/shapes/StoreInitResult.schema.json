@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/StoreInitResult",
+  "title": "StoreInitResult",
+  "description": "Result payload for aascribe init.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "store": {
+      "type": "string",
+      "description": "Resolved absolute or user-supplied store path."
+    },
+    "created": {
+      "type": "boolean",
+      "description": "True when a new store was created."
+    },
+    "reinitialized": {
+      "type": "boolean",
+      "description": "True when an existing store was recreated with --force."
+    },
+    "layout_version": {
+      "type": "string",
+      "description": "Bootstrap store layout version identifier."
+    }
+  },
+  "required": ["store", "created", "reinitialized"],
+  "examples": [
+    {
+      "store": "/Users/you/.aascribe",
+      "created": true,
+      "reinitialized": false,
+      "layout_version": "bootstrap-v1"
+    }
+  ]
+}
