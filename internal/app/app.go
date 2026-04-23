@@ -15,6 +15,11 @@ import (
 
 func Run(args []string, stdout, stderr io.Writer) int {
 	started := time.Now()
+	if helpTopic, ok := cli.HelpTopicFromArgs(args); ok {
+		_, _ = fmt.Fprintln(stdout, cli.HelpTextForTopic(helpTopic))
+		return apperr.ExitSuccess.Code()
+	}
+
 	parsed, err := cli.Parse(args)
 	if err != nil {
 		format := cli.FormatJSON
@@ -32,7 +37,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		logger := logging.New(stderr, "", verbose)
 		defer logger.Close()
-		logger.Error("command failed during parse", "command", commandName, "store", storePath, "error_code", output.ErrorCode(err), "error_message", err.Error())
+		logger.Debug("command failed during parse", "command", commandName, "store", storePath, "error_code", output.ErrorCode(err), "error_message", err.Error())
 		_ = output.WriteError(stdout, format, false, err, commandName, started, storePath)
 		return normalizedStatus(err)
 	}

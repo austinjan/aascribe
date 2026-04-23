@@ -19,13 +19,14 @@ const (
 )
 
 type Parsed struct {
-	Store   string
-	Format  Format
-	Quiet   bool
-	Verbose bool
-	Help    bool
-	Version bool
-	Command Command
+	Store     string
+	Format    Format
+	Quiet     bool
+	Verbose   bool
+	Help      bool
+	Version   bool
+	HelpTopic string
+	Command   Command
 }
 
 type Command interface {
@@ -172,10 +173,15 @@ func Parse(args []string) (*Parsed, error) {
 
 func HelpText() string {
 	return strings.TrimSpace(`
-aascribe - Memory-first local CLI for project recall
+aascribe - Memory-first local CLI for project recall and agent-friendly workspace memory
 
 Usage:
   aascribe [global flags] <command> [command flags]
+
+What This CLI Does:
+  aascribe stores and retrieves project memory in a local filesystem-backed store.
+  It is designed for AI agents that need durable recall, indexing, and debugging context.
+  When you are unsure where to start, initialize a store first, then inspect logs or use a command-specific help page.
 
 Global flags:
   --store <path>       Path to the memory store root
@@ -186,17 +192,351 @@ Global flags:
   --version            Show version
 
 Commands:
-  init
-  logs
-  index
-  describe
-  remember
-  consolidate
-  recall
-  list
-  show
-  forget
+  init         Create or reinitialize the local memory store layout
+  logs         Inspect, export, or clear aascribe logs
+  index        Index a folder for later retrieval and summarization
+  describe     Summarize one file with optional length and focus controls
+  remember     Write a short-term memory item
+  consolidate  Turn short-term memories into longer-term memory entries
+  recall       Search memories by query and filters
+  list         List raw memory entries for inspection
+  show         Show one memory entry in full
+  forget       Delete one memory entry
+
+Main Flows:
+  1. Initialize a store for the current workspace:
+     aascribe init
+  2. Use an explicit project-local store when needed:
+     aascribe --store ./project-mem init
+  3. Check where logs are being written:
+     aascribe logs path
+  4. Export logs for debugging:
+     aascribe logs export --output ./aascribe.log
+
+Current Implementation Status:
+  Working now:
+    init
+    logs path
+    logs export
+    logs clear
+  CLI surface exists but command execution is still being implemented:
+    index, describe, remember, consolidate, recall, list, show, forget
+
+How To Get More Information:
+  aascribe <command> --help
+  aascribe logs --help
+  Read docs/USAGE.md for the longer reference
+  Prefer --format json when another agent will parse the result
 `)
+}
+
+func HelpTextForTopic(topic string) string {
+	switch strings.TrimSpace(topic) {
+	case "", "root":
+		return HelpText()
+	case "init":
+		return strings.TrimSpace(`
+aascribe init - create or reinitialize the memory store
+
+Purpose:
+  Set up the filesystem layout used by aascribe for short-term memory, long-term memory, index data, cache data, and logs.
+
+Usage:
+  aascribe init [--force]
+  aascribe --store ./project-mem init [--force]
+
+Key Flags:
+  --force     Reinitialize an existing store and reset managed aascribe contents
+
+Examples:
+  aascribe init
+  aascribe --store ./project-mem init
+  aascribe --store ./project-mem init --force
+
+What To Do Next:
+  Run aascribe logs path to confirm the active log file
+  Use aascribe --help to see the full command surface
+  Read docs/USAGE.md for the longer command reference
+`)
+	case "logs":
+		return strings.TrimSpace(`
+aascribe logs - inspect and manage aascribe log files
+
+Purpose:
+  Help an agent discover the current log path, export logs for debugging, or clear logs explicitly.
+
+Subcommands:
+  path      Print the active log file path for the current store
+  export    Copy the current log file to another path
+  clear     Truncate the current log file, requires --force
+
+Examples:
+  aascribe logs path
+  aascribe logs export --output ./aascribe.log
+  aascribe logs clear --force
+  aascribe --store ./project-mem logs path
+
+Get More Information:
+  aascribe logs path --help
+  aascribe logs export --help
+  aascribe logs clear --help
+  Read docs/logging.md for deeper log examples
+`)
+	case "logs path":
+		return strings.TrimSpace(`
+aascribe logs path - print the active aascribe log file path
+
+Purpose:
+  Tell an agent where aascribe is currently writing logs for the active store.
+
+Usage:
+  aascribe logs path
+  aascribe --store ./project-mem logs path
+
+Examples:
+  aascribe logs path
+  aascribe --store ./project-mem logs path
+
+Next Steps:
+  Use aascribe logs export --output ./aascribe.log to copy the file
+  Use aascribe logs clear --force to truncate the file
+`)
+	case "logs export":
+		return strings.TrimSpace(`
+aascribe logs export - copy the current log file to another path
+
+Purpose:
+  Export the active aascribe log file so another tool, agent, or person can inspect it.
+
+Usage:
+  aascribe logs export --output <path>
+  aascribe --store ./project-mem logs export --output <path>
+
+Required Flags:
+  --output <path>     Destination file path for the exported log
+
+Examples:
+  aascribe logs export --output ./aascribe.log
+  aascribe --store ./project-mem logs export --output ./debug/aascribe.log
+
+Next Steps:
+  Use aascribe logs path to confirm the source log file
+  Read docs/logging.md for JSON examples and debugging guidance
+`)
+	case "logs clear":
+		return strings.TrimSpace(`
+aascribe logs clear - truncate the current log file
+
+Purpose:
+  Clear the active log file for the current store.
+
+Usage:
+  aascribe logs clear --force
+  aascribe --store ./project-mem logs clear --force
+
+Required Flags:
+  --force     Required because this operation is destructive
+
+Examples:
+  aascribe logs clear --force
+  aascribe --store ./project-mem logs clear --force
+
+Next Steps:
+  Use aascribe logs path to verify which file will be cleared
+  Use aascribe logs export --output ./aascribe.log before clearing if you need a backup
+`)
+	case "index":
+		return strings.TrimSpace(`
+aascribe index - index one path for later recall and summarization
+
+Purpose:
+  Prepare repository content for faster later retrieval. This command is part of the intended workflow, but execution is not fully implemented yet.
+
+Usage:
+  aascribe index <path> [--depth <n>] [--include <glob>] [--exclude <glob>] [--refresh] [--no-summary] [--max-file-size <bytes>]
+
+Examples:
+  aascribe index .
+  aascribe index ./internal --depth 2
+  aascribe --store ./project-mem index . --exclude vendor
+
+Further Info:
+  aascribe --help
+  Read docs/USAGE.md and docs/tasks/index-tasks.md for design context
+`)
+	case "describe":
+		return strings.TrimSpace(`
+aascribe describe - summarize one file
+
+Purpose:
+  Produce a short, medium, or long description of a single file, optionally focused on a specific area. This command surface exists, but execution is not fully implemented yet.
+
+Usage:
+  aascribe describe <file> [--length short|medium|long] [--focus <topic>] [--refresh]
+
+Examples:
+  aascribe describe ./README.md
+  aascribe describe ./internal/app/app.go --length short
+  aascribe describe ./internal/cli/cli.go --focus help
+
+Further Info:
+  aascribe --help
+  Read docs/USAGE.md for the broader command reference
+`)
+	case "remember":
+		return strings.TrimSpace(`
+aascribe remember - write one short-term memory item
+
+Purpose:
+  Save a memory entry that an agent may want to recall later. This command surface exists, but execution is not fully implemented yet.
+
+Usage:
+  aascribe remember <content> [--tag <tag>] [--source <value>] [--session <id>] [--ttl <duration>] [--importance <1-5>]
+  echo "..." | aascribe remember --stdin
+
+Examples:
+  aascribe remember "Need to revisit parser errors"
+  aascribe remember "Confirm store path behavior" --tag todo --importance 4
+  echo "Longer memory text" | aascribe remember --stdin
+
+Further Info:
+  aascribe --help
+  Read docs/USAGE.md for the broader command reference
+`)
+	case "consolidate":
+		return strings.TrimSpace(`
+aascribe consolidate - merge short-term memories into longer-term memory
+
+Purpose:
+  Analyze short-term memory entries and produce longer-term memory records. This command surface exists, but execution is not fully implemented yet.
+
+Usage:
+  aascribe consolidate [--since <time>] [--until <time>] [--session <id>] [--tag <tag>] [--topic <topic>] [--dry-run] [--keep-short] [--min-items <n>]
+
+Examples:
+  aascribe consolidate
+  aascribe consolidate --since 7d --topic parser
+  aascribe consolidate --dry-run --tag bug
+
+Further Info:
+  aascribe --help
+  Read docs/USAGE.md for the broader command reference
+`)
+	case "recall":
+		return strings.TrimSpace(`
+aascribe recall - search stored memories
+
+Purpose:
+  Retrieve relevant memories by query and filters. This command surface exists, but execution is not fully implemented yet.
+
+Usage:
+  aascribe recall <query> [--tier short|long|all] [--limit <n>] [--tag <tag>] [--since <time>] [--until <time>] [--min-score <0-1>] [--include-source]
+
+Examples:
+  aascribe recall "parser error"
+  aascribe recall "store path" --tier short --limit 5
+  aascribe recall "logging" --include-source
+
+Further Info:
+  aascribe --help
+  Read docs/USAGE.md for the broader command reference
+`)
+	case "list":
+		return strings.TrimSpace(`
+aascribe list - list memory entries
+
+Purpose:
+  Show raw memory entries for inspection or debugging. This command surface exists, but execution is not fully implemented yet.
+
+Usage:
+  aascribe list [--tier short|long|all] [--session <id>] [--tag <tag>] [--since <time>] [--until <time>] [--limit <n>] [--order asc|desc]
+
+Examples:
+  aascribe list
+  aascribe list --tier short --limit 20
+  aascribe list --tag todo --order asc
+
+Further Info:
+  aascribe --help
+  Read docs/USAGE.md for the broader command reference
+`)
+	case "show":
+		return strings.TrimSpace(`
+aascribe show - show one memory entry in full
+
+Purpose:
+  Retrieve the full detail for one memory id. This command surface exists, but execution is not fully implemented yet.
+
+Usage:
+  aascribe show <id>
+
+Examples:
+  aascribe show mem_123
+  aascribe show abcdef
+
+Further Info:
+  aascribe --help
+  Read docs/USAGE.md for the broader command reference
+`)
+	case "forget":
+		return strings.TrimSpace(`
+aascribe forget - delete one memory entry
+
+Purpose:
+  Remove a stored memory entry by id. This command surface exists, but execution is not fully implemented yet.
+
+Usage:
+  aascribe forget <id> [--force]
+
+Examples:
+  aascribe forget mem_123
+  aascribe forget mem_123 --force
+
+Further Info:
+  aascribe --help
+  Read docs/USAGE.md for the broader command reference
+`)
+	default:
+		return HelpText()
+	}
+}
+
+func HelpTopicFromArgs(args []string) (string, bool) {
+	if len(args) == 0 {
+		return "root", true
+	}
+
+	tokens := make([]string, 0, 2)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--help" || arg == "-h":
+			return classifyHelpTopic(tokens), true
+		case arg == "--store" || arg == "--format":
+			i++
+		case strings.HasPrefix(arg, "--store="), strings.HasPrefix(arg, "--format="):
+		case strings.HasPrefix(arg, "-"):
+		default:
+			if len(tokens) < 2 {
+				tokens = append(tokens, arg)
+			}
+		}
+	}
+
+	return "", false
+}
+
+func classifyHelpTopic(tokens []string) string {
+	if len(tokens) == 0 {
+		return "root"
+	}
+	if tokens[0] == "logs" {
+		if len(tokens) > 1 {
+			return "logs " + tokens[1]
+		}
+		return "logs"
+	}
+	return tokens[0]
 }
 
 func parseGlobals(args []string, parsed *Parsed) ([]string, error) {

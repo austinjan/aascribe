@@ -36,6 +36,85 @@ func TestParseDefaultFormatJSON(t *testing.T) {
 	}
 }
 
+func TestRunWithoutArgsPrintsHelp(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run(nil, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	if !strings.Contains(stdout.String(), "Usage:") {
+		t.Fatalf("expected help text, got %q", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+}
+
+func TestRunTopLevelHelpIncludesAgentGuidance(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, "What This CLI Does:") {
+		t.Fatalf("expected agent-oriented help section, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "How To Get More Information:") {
+		t.Fatalf("expected next-step guidance, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "aascribe <command> --help") {
+		t.Fatalf("expected follow-up help guidance, got %q", rendered)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+}
+
+func TestRunLogsHelpIncludesSubcommandsAndExamples(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"logs", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, "Subcommands:") {
+		t.Fatalf("expected logs subcommands section, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "aascribe logs export --output ./aascribe.log") {
+		t.Fatalf("expected logs example, got %q", rendered)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+}
+
+func TestRunLogsExportHelpIncludesRequiredFlag(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"logs", "export", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, "Required Flags:") {
+		t.Fatalf("expected required flags section, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "--output <path>") {
+		t.Fatalf("expected output flag guidance, got %q", rendered)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+}
+
 func TestResolveStorePathPrefersExplicitFlag(t *testing.T) {
 	temp := t.TempDir()
 	explicit := filepath.Join(temp, "explicit-store")

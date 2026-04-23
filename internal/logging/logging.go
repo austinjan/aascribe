@@ -144,7 +144,7 @@ func quoteIfNeeded(value string) string {
 	if value == "" {
 		return `""`
 	}
-	if strings.ContainsAny(value, " \t\n\r\"") {
+	if strings.ContainsAny(value, " \t\n\r\"=") {
 		return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
 	}
 	return value
