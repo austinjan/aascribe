@@ -113,6 +113,78 @@ timeout_seconds = 30
 	assertAppErrorCode(t, err, "MISSING_SECRET")
 }
 
+func TestResolveLoadsSecretFromDotEnvInWorkingDirectory(t *testing.T) {
+	storePath := t.TempDir()
+	writeConfig(t, storePath, `
+[llm]
+provider = "gemini"
+model = "gemini-2.5-flash"
+api_key_env = "GEMINI_API_KEY"
+timeout_seconds = 30
+`)
+
+	projectRoot := t.TempDir()
+	writeEnvFile(t, filepath.Join(projectRoot, ".env"), "GEMINI_API_KEY=dotenv-secret\n")
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("expected working directory, got %v", err)
+	}
+	if err := os.Chdir(projectRoot); err != nil {
+		t.Fatalf("failed to switch working directory: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Fatalf("failed to restore working directory: %v", err)
+		}
+	}()
+
+	resolved, err := Resolve(storePath, ResolveOptions{}, lookupEnv(map[string]string{}))
+	if err != nil {
+		t.Fatalf("expected resolve success, got %v", err)
+	}
+	if resolved.LLM.APIKey != "dotenv-secret" {
+		t.Fatalf("expected dotenv secret, got %q", resolved.LLM.APIKey)
+	}
+}
+
+func TestResolveEnvOverridesDotEnv(t *testing.T) {
+	storePath := t.TempDir()
+	writeConfig(t, storePath, `
+[llm]
+provider = "gemini"
+model = "gemini-2.5-flash"
+api_key_env = "GEMINI_API_KEY"
+timeout_seconds = 30
+`)
+
+	projectRoot := t.TempDir()
+	writeEnvFile(t, filepath.Join(projectRoot, ".env"), "GEMINI_API_KEY=dotenv-secret\n")
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("expected working directory, got %v", err)
+	}
+	if err := os.Chdir(projectRoot); err != nil {
+		t.Fatalf("failed to switch working directory: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Fatalf("failed to restore working directory: %v", err)
+		}
+	}()
+
+	resolved, err := Resolve(storePath, ResolveOptions{}, lookupEnv(map[string]string{
+		"GEMINI_API_KEY": "shell-secret",
+	}))
+	if err != nil {
+		t.Fatalf("expected resolve success, got %v", err)
+	}
+	if resolved.LLM.APIKey != "shell-secret" {
+		t.Fatalf("expected shell secret override, got %q", resolved.LLM.APIKey)
+	}
+}
+
 func TestResolveEnvOverridesConfig(t *testing.T) {
 	storePath := t.TempDir()
 	writeConfig(t, storePath, `
@@ -201,6 +273,16 @@ func writeConfig(t *testing.T, storePath, body string) {
 	}
 	if err := os.WriteFile(ConfigPath(storePath), []byte(body), 0o644); err != nil {
 		t.Fatalf("write config failed: %v", err)
+	}
+}
+
+func writeEnvFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir env dir failed: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write env failed: %v", err)
 	}
 }
 

@@ -59,6 +59,10 @@ func LogFileNotFound(path string) *Error {
 	return newError("LOG_FILE_NOT_FOUND", ExitNotFound, "No log file at %s.", path)
 }
 
+func NotFoundOutput(id string) *Error {
+	return newError("OUTPUT_NOT_FOUND", ExitNotFound, "No stored output with id %s.", id)
+}
+
 func NotImplemented(command string) *Error {
 	return newError("NOT_IMPLEMENTED", ExitGeneralRuntimeError, "The command `%s` is not implemented yet.", command)
 }

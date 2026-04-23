@@ -115,7 +115,8 @@ func TestWriteErrorJSONTailorsLogsExportGuidance(t *testing.T) {
 func TestWriteErrorJSONTailorsUnknownSubcommandGuidance(t *testing.T) {
 	var out bytes.Buffer
 
-	err := WriteError(&out, cli.FormatJSON, false, apperr.InvalidArguments("Unknown subcommand frobnicate."), "<parse>", time.Now(), "<unresolved>")
+	_, parseErr := cli.Parse([]string{"frobnicate"})
+	err := WriteError(&out, cli.FormatJSON, false, parseErr, "<parse>", time.Now(), "<unresolved>")
 	if err != nil {
 		t.Fatalf("expected write success, got %v", err)
 	}
@@ -134,5 +135,98 @@ func TestWriteErrorJSONTailorsUnknownSubcommandGuidance(t *testing.T) {
 	}
 	if len(payload.Error.Examples) < 3 {
 		t.Fatalf("expected example commands, got %#v", payload.Error.Examples)
+	}
+}
+
+func TestWriteErrorJSONSuggestsClosestCommandForTypo(t *testing.T) {
+	var out bytes.Buffer
+
+	_, parseErr := cli.Parse([]string{"summarized", ".env"})
+	err := WriteError(&out, cli.FormatJSON, false, parseErr, "<parse>", time.Now(), "<unresolved>")
+	if err != nil {
+		t.Fatalf("expected write success, got %v", err)
+	}
+
+	var payload struct {
+		Error struct {
+			Hint     string   `json:"hint"`
+			Examples []string `json:"examples"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("expected valid json output, got %v", err)
+	}
+	if !strings.Contains(payload.Error.Hint, "Did you mean") {
+		t.Fatalf("expected suggestion hint, got %q", payload.Error.Hint)
+	}
+	if len(payload.Error.Examples) == 0 || payload.Error.Examples[0] != "aascribe summarize" {
+		t.Fatalf("expected summarize suggestion first, got %#v", payload.Error.Examples)
+	}
+}
+
+func TestWriteErrorJSONSuggestsClosestLogsSubcommandForTypo(t *testing.T) {
+	var out bytes.Buffer
+
+	_, parseErr := cli.Parse([]string{"logs", "exprot"})
+	err := WriteError(&out, cli.FormatJSON, false, parseErr, "<parse>", time.Now(), "<unresolved>")
+	if err != nil {
+		t.Fatalf("expected write success, got %v", err)
+	}
+
+	var payload struct {
+		Error struct {
+			Hint     string   `json:"hint"`
+			Examples []string `json:"examples"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("expected valid json output, got %v", err)
+	}
+	if !strings.Contains(payload.Error.Hint, "Did you mean") {
+		t.Fatalf("expected suggestion hint, got %q", payload.Error.Hint)
+	}
+	if len(payload.Error.Examples) == 0 || payload.Error.Examples[0] != "aascribe logs export" {
+		t.Fatalf("expected export suggestion first, got %#v", payload.Error.Examples)
+	}
+}
+
+func TestWriteSuccessJSONTruncatesPrimaryTextAndAddsTransport(t *testing.T) {
+	var out bytes.Buffer
+
+	storePath := t.TempDir()
+	largeText := strings.Repeat("hello world ", 500)
+	result := &CommandResult{
+		Data: map[string]any{
+			"text": largeText,
+		},
+		Text:           largeText,
+		PrimaryTextKey: "text",
+	}
+
+	err := WriteSuccess(&out, cli.FormatJSON, false, result, Meta{Command: "chat", Store: storePath})
+	if err != nil {
+		t.Fatalf("expected write success, got %v", err)
+	}
+
+	var payload struct {
+		Data struct {
+			Text      string `json:"text"`
+			Transport struct {
+				Truncated bool   `json:"truncated"`
+				OutputID  string `json:"output_id"`
+			} `json:"transport"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("expected valid json output, got %v", err)
+	}
+	if payload.Data.Transport.OutputID == "" {
+		t.Fatalf("expected transport output id")
+	}
+	if !payload.Data.Transport.Truncated {
+		t.Fatalf("expected truncated transport metadata")
+	}
+	if payload.Data.Text == largeText {
+		t.Fatalf("expected truncated inline text, got full text")
 	}
 }

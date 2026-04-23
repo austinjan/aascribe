@@ -1,8 +1,10 @@
 # Logging And Debugging Tasks
 
-Status: Partially Completed
+Status: Completed
 
-Completed in current branch:
+Archived after the `logging-system` work landed. Future feature-specific logging requirements below remain useful implementation guidance for later tasks, but the standalone logging-system task itself is finished.
+
+Completed outcomes:
 
 - added a shared logger package
 - wired `--verbose` to debug logging

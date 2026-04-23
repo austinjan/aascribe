@@ -10,6 +10,7 @@ import (
 
 	"github.com/austinjan/aascribe/internal/cli"
 	"github.com/austinjan/aascribe/internal/store"
+	"github.com/austinjan/aascribe/pkg/llmoutput"
 )
 
 func TestParseInitStoreAndForce(t *testing.T) {
@@ -33,6 +34,62 @@ func TestParseDefaultFormatJSON(t *testing.T) {
 	}
 	if parsed.Format != cli.FormatJSON {
 		t.Fatalf("expected default json format, got %q", parsed.Format)
+	}
+}
+
+func TestParseChatPrompt(t *testing.T) {
+	parsed, err := cli.Parse([]string{"chat", "hello"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.ChatCommand)
+	if !ok {
+		t.Fatalf("expected chat command, got %#v", parsed.Command)
+	}
+	if cmd.Prompt != "hello" {
+		t.Fatalf("expected prompt hello, got %q", cmd.Prompt)
+	}
+}
+
+func TestParseSummarizeFile(t *testing.T) {
+	parsed, err := cli.Parse([]string{"summarize", "README.md"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.SummarizeCommand)
+	if !ok {
+		t.Fatalf("expected summarize command, got %#v", parsed.Command)
+	}
+	if cmd.File != "README.md" {
+		t.Fatalf("expected file README.md, got %q", cmd.File)
+	}
+}
+
+func TestParseOutputSlice(t *testing.T) {
+	parsed, err := cli.Parse([]string{"output", "slice", "out_000001", "--offset", "10", "--limit", "20"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.OutputSliceCommand)
+	if !ok {
+		t.Fatalf("expected output slice command, got %#v", parsed.Command)
+	}
+	if cmd.ID != "out_000001" || cmd.Offset != 10 || cmd.Limit != 20 {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
+func TestParseOutputGenerate(t *testing.T) {
+	parsed, err := cli.Parse([]string{"output", "generate", "--lines", "20", "--width", "40", "--prefix", "demo"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.OutputGenerateCommand)
+	if !ok {
+		t.Fatalf("expected output generate command, got %#v", parsed.Command)
+	}
+	if cmd.Lines != 20 || cmd.Width != 40 || cmd.Prefix != "demo" {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
 	}
 }
 
@@ -95,6 +152,26 @@ func TestRunLogsHelpIncludesSubcommandsAndExamples(t *testing.T) {
 	}
 }
 
+func TestRunOutputHelpIncludesSubcommandsAndExamples(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"output", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, "Subcommands:") {
+		t.Fatalf("expected output subcommands section, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "aascribe output generate") {
+		t.Fatalf("expected output generate example, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "aascribe output slice out_000001 --offset 4000 --limit 4000") {
+		t.Fatalf("expected output slice example, got %q", rendered)
+	}
+}
+
 func TestRunLogsExportHelpIncludesRequiredFlag(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -112,6 +189,40 @@ func TestRunLogsExportHelpIncludesRequiredFlag(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+}
+
+func TestRunChatHelpIncludesPurpose(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"chat", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, "send one prompt directly to the configured LLM") {
+		t.Fatalf("expected chat help text, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "aascribe chat \"Say hello in one short sentence.\"") {
+		t.Fatalf("expected chat example, got %q", rendered)
+	}
+}
+
+func TestRunSummarizeHelpIncludesPurpose(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"summarize", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, "summarize one file through the configured LLM") {
+		t.Fatalf("expected summarize help text, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "aascribe summarize ./README.md") {
+		t.Fatalf("expected summarize example, got %q", rendered)
 	}
 }
 
@@ -200,6 +311,7 @@ func TestInitCreatesExpectedLayout(t *testing.T) {
 	assertExists(t, filepath.Join(storePath, "long_term"))
 	assertExists(t, filepath.Join(storePath, "index"))
 	assertExists(t, filepath.Join(storePath, "cache"))
+	assertExists(t, filepath.Join(storePath, "outputs"))
 	assertExists(t, filepath.Join(storePath, "layout.json"))
 }
 
@@ -301,7 +413,7 @@ func TestLogsPathReturnsExpectedFilePath(t *testing.T) {
 		t.Fatalf("expected valid json output, got %v", err)
 	}
 	data := payload["data"].(map[string]any)
-	expected := filepath.Join(storePath, "logs", "aascribe.log")
+	expected := filepath.Join(filepath.Dir(storePath), "logs", "aascribe.log")
 	if data["path"] != expected {
 		t.Fatalf("expected path %q, got %#v", expected, data["path"])
 	}
@@ -354,7 +466,7 @@ func TestLogsClearTruncatesLogFile(t *testing.T) {
 	if status != 1 {
 		t.Fatalf("expected stubbed list failure to still produce logs, got %d", status)
 	}
-	logPath := filepath.Join(storePath, "logs", "aascribe.log")
+	logPath := filepath.Join(filepath.Dir(storePath), "logs", "aascribe.log")
 	infoBefore, err := os.Stat(logPath)
 	if err != nil {
 		t.Fatalf("expected log file to exist, got %v", err)
@@ -375,6 +487,65 @@ func TestLogsClearTruncatesLogFile(t *testing.T) {
 	}
 	if infoAfter.Size() != 0 {
 		t.Fatalf("expected truncated log file, got size %d", infoAfter.Size())
+	}
+}
+
+func TestOutputHeadReadsStoredOutput(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "aascribe-store")
+	assertNoError(t, os.MkdirAll(storePath, 0o755))
+	_, err := llmoutput.Deliver(storePath, "chat", "one\ntwo\nthree\nfour", llmoutput.Config{InlineRuneLimit: 4})
+	if err != nil {
+		t.Fatalf("expected stored output, got %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := Run([]string{"--store", storePath, "output", "head", "out_000001", "--lines", "2"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected output head success, got %d with stdout=%s stderr=%s", status, stdout.String(), stderr.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected valid json output, got %v", err)
+	}
+	data := payload["data"].(map[string]any)
+	if !strings.Contains(data["text"].(string), "one\ntwo") {
+		t.Fatalf("expected head output, got %#v", data["text"])
+	}
+}
+
+func TestOutputGenerateSpillsAndReturnsTransportHint(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "aascribe-store")
+	assertNoError(t, os.MkdirAll(storePath, 0o755))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := Run([]string{"--store", storePath, "output", "generate", "--lines", "300", "--width", "120"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected output generate success, got %d with stdout=%s stderr=%s", status, stdout.String(), stderr.String())
+	}
+
+	var payload struct {
+		Data struct {
+			Text      string `json:"text"`
+			Transport struct {
+				Truncated bool   `json:"truncated"`
+				OutputID  string `json:"output_id"`
+			} `json:"transport"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected valid json output, got %v", err)
+	}
+	if !payload.Data.Transport.Truncated {
+		t.Fatalf("expected truncated transport metadata")
+	}
+	if payload.Data.Transport.OutputID == "" {
+		t.Fatalf("expected output id")
+	}
+	if payload.Data.Text == "" {
+		t.Fatalf("expected inline text")
 	}
 }
 

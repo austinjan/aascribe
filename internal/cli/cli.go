@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-
-	"github.com/austinjan/aascribe/internal/apperr"
 )
 
 const Version = "0.1.0"
@@ -54,6 +52,52 @@ type LogsClearCommand struct {
 }
 
 func (c LogsClearCommand) Name() string { return "logs" }
+
+type OutputListCommand struct{}
+
+func (c OutputListCommand) Name() string { return "output" }
+
+type OutputMetaCommand struct {
+	ID string
+}
+
+func (c OutputMetaCommand) Name() string { return "output" }
+
+type OutputShowCommand struct {
+	ID string
+}
+
+func (c OutputShowCommand) Name() string { return "output" }
+
+type OutputHeadCommand struct {
+	ID    string
+	Lines int
+}
+
+func (c OutputHeadCommand) Name() string { return "output" }
+
+type OutputTailCommand struct {
+	ID    string
+	Lines int
+}
+
+func (c OutputTailCommand) Name() string { return "output" }
+
+type OutputSliceCommand struct {
+	ID     string
+	Offset int
+	Limit  int
+}
+
+func (c OutputSliceCommand) Name() string { return "output" }
+
+type OutputGenerateCommand struct {
+	Lines  int
+	Width  int
+	Prefix string
+}
+
+func (c OutputGenerateCommand) Name() string { return "output" }
 
 type IndexCommand struct {
 	Path        string
@@ -115,6 +159,18 @@ type RecallCommand struct {
 
 func (c RecallCommand) Name() string { return "recall" }
 
+type ChatCommand struct {
+	Prompt string
+}
+
+func (c ChatCommand) Name() string { return "chat" }
+
+type SummarizeCommand struct {
+	File string
+}
+
+func (c SummarizeCommand) Name() string { return "summarize" }
+
 type ListCommand struct {
 	Tier    string
 	Session string
@@ -157,7 +213,7 @@ func Parse(args []string) (*Parsed, error) {
 		return parsed, nil
 	}
 	if len(rest) == 0 {
-		return parsed, apperr.InvalidArguments("No subcommand provided.")
+		return parsed, newParseError(ParseErrorNoSubcommand, "root", "", "No subcommand provided.")
 	}
 
 	commandName := rest[0]
@@ -194,11 +250,14 @@ Global flags:
 Commands:
   init         Create or reinitialize the local memory store layout
   logs         Inspect, export, or clear aascribe logs
+  output       Browse stored oversized outputs for LLM-safe continuation
   index        Index a folder for later retrieval and summarization
   describe     Summarize one file with optional length and focus controls
   remember     Write a short-term memory item
   consolidate  Turn short-term memories into longer-term memory entries
   recall       Search memories by query and filters
+  chat         Send one prompt directly to the configured LLM for debugging
+  summarize    Summarize one file through the LLM for debugging and quality checks
   list         List raw memory entries for inspection
   show         Show one memory entry in full
   forget       Delete one memory entry
@@ -219,6 +278,15 @@ Current Implementation Status:
     logs path
     logs export
     logs clear
+    output generate
+    output list
+    output meta
+    output show
+    output head
+    output tail
+    output slice
+    chat
+    summarize
   CLI surface exists but command execution is still being implemented:
     index, describe, remember, consolidate, recall, list, show, forget
 
@@ -345,6 +413,104 @@ Next Steps:
   Use aascribe logs path to verify which file will be cleared
   Use aascribe logs export --output ./aascribe.log before clearing if you need a backup
 `)
+	case "output":
+		return strings.TrimSpace(`
+aascribe output - inspect stored oversized command outputs
+
+Purpose:
+  Help an agent continue reading large outputs that were spilled to managed files instead of being returned inline.
+
+Subcommands:
+  generate  Generate large output for testing the LLM output transport
+  list      List recent stored outputs
+  meta      Show metadata for one stored output
+  show      Show metadata plus the default first chunk
+  head      Show the first N lines of a stored output
+  tail      Show the last N lines of a stored output
+  slice     Show a deterministic rune-range slice of a stored output
+
+Examples:
+  aascribe output generate
+  aascribe output generate --lines 300 --width 120
+  aascribe output list
+  aascribe output meta out_000001
+  aascribe output show out_000001
+  aascribe output head out_000001 --lines 100
+  aascribe output tail out_000001 --lines 100
+  aascribe output slice out_000001 --offset 4000 --limit 4000
+`)
+	case "output list":
+		return strings.TrimSpace(`
+aascribe output list - list recent stored outputs
+
+Usage:
+  aascribe output list
+
+Examples:
+  aascribe output list
+`)
+	case "output generate":
+		return strings.TrimSpace(`
+aascribe output generate - generate large output for transport testing
+
+Usage:
+  aascribe output generate [--lines <n>] [--width <n>] [--prefix <text>]
+
+Examples:
+  aascribe output generate
+  aascribe output generate --lines 300 --width 120
+  aascribe output generate --lines 20 --width 40 --prefix test
+`)
+	case "output meta":
+		return strings.TrimSpace(`
+aascribe output meta - show metadata for one stored output
+
+Usage:
+  aascribe output meta <output-id>
+
+Examples:
+  aascribe output meta out_000001
+`)
+	case "output show":
+		return strings.TrimSpace(`
+aascribe output show - show metadata plus the default first chunk
+
+Usage:
+  aascribe output show <output-id>
+
+Examples:
+  aascribe output show out_000001
+`)
+	case "output head":
+		return strings.TrimSpace(`
+aascribe output head - show the first N lines of a stored output
+
+Usage:
+  aascribe output head <output-id> [--lines <n>]
+
+Examples:
+  aascribe output head out_000001 --lines 100
+`)
+	case "output tail":
+		return strings.TrimSpace(`
+aascribe output tail - show the last N lines of a stored output
+
+Usage:
+  aascribe output tail <output-id> [--lines <n>]
+
+Examples:
+  aascribe output tail out_000001 --lines 100
+`)
+	case "output slice":
+		return strings.TrimSpace(`
+aascribe output slice - show a deterministic rune-range slice of a stored output
+
+Usage:
+  aascribe output slice <output-id> --offset <n> --limit <n>
+
+Examples:
+  aascribe output slice out_000001 --offset 4000 --limit 4000
+`)
 	case "index":
 		return strings.TrimSpace(`
 aascribe index - index one path for later recall and summarization
@@ -441,6 +607,48 @@ Further Info:
   aascribe --help
   Read docs/USAGE.md for the broader command reference
 `)
+	case "chat":
+		return strings.TrimSpace(`
+aascribe chat - send one prompt directly to the configured LLM
+
+Purpose:
+  Debug the LLM integration end to end using the current store config and secret env var.
+
+Usage:
+  aascribe chat <prompt>
+  aascribe --store ./project-mem chat <prompt>
+
+Examples:
+  aascribe chat "Say hello in one short sentence."
+  aascribe chat "Summarize the purpose of this repository in two bullets."
+  aascribe --store ./project-mem chat "What model are you using?"
+
+Next Steps:
+  Check <store>/config.toml if config loading fails
+  Confirm the API key env var configured in <store>/config.toml is set
+  Use aascribe describe --help for the next intended consumer of the LLM layer
+`)
+	case "summarize":
+		return strings.TrimSpace(`
+aascribe summarize - summarize one file through the configured LLM
+
+Purpose:
+  Debug the summary quality for one file using the same LLM path that future describe/index work will rely on.
+
+Usage:
+  aascribe summarize <file>
+  aascribe --store ./project-mem summarize <file>
+
+Examples:
+  aascribe summarize ./README.md
+  aascribe summarize ./internal/cli/cli.go
+  aascribe --store ./project-mem summarize ./main.go
+
+Next Steps:
+  Use aascribe chat to debug direct prompts separately
+  Check <store>/config.toml if config loading fails
+  Tune the prompt here before wiring describe/index onto the same summary core
+`)
 	case "list":
 		return strings.TrimSpace(`
 aascribe list - list memory entries
@@ -536,6 +744,12 @@ func classifyHelpTopic(tokens []string) string {
 		}
 		return "logs"
 	}
+	if tokens[0] == "output" {
+		if len(tokens) > 1 {
+			return "output " + tokens[1]
+		}
+		return "output"
+	}
 	return tokens[0]
 }
 
@@ -554,7 +768,7 @@ func parseGlobals(args []string, parsed *Parsed) ([]string, error) {
 		switch {
 		case arg == "--store":
 			if i+1 >= len(args) {
-				return nil, apperr.InvalidArguments("Missing value for --store.")
+				return nil, newParseError(ParseErrorMissingFlagValue, "global", "--store", "Missing value for --store.")
 			}
 			parsed.Store = args[i+1]
 			i += 2
@@ -563,7 +777,7 @@ func parseGlobals(args []string, parsed *Parsed) ([]string, error) {
 			i++
 		case arg == "--format":
 			if i+1 >= len(args) {
-				return nil, apperr.InvalidArguments("Missing value for --format.")
+				return nil, newParseError(ParseErrorMissingFlagValue, "global", "--format", "Missing value for --format.")
 			}
 			format, err := parseFormat(args[i+1])
 			if err != nil {
@@ -591,7 +805,7 @@ func parseGlobals(args []string, parsed *Parsed) ([]string, error) {
 			parsed.Version = true
 			i++
 		default:
-			return nil, apperr.InvalidArguments("Unknown global flag %s.", arg)
+			return nil, newUnknownGlobalFlagError(arg)
 		}
 	}
 
@@ -605,7 +819,7 @@ func parseFormat(value string) (Format, error) {
 	case "text":
 		return FormatText, nil
 	default:
-		return "", apperr.InvalidArguments("Invalid value for --format: %s.", value)
+		return "", newParseError(ParseErrorInvalidFlagValue, "global", "--format", "Invalid value for --format: %s.", value)
 	}
 }
 
@@ -615,6 +829,8 @@ func parseSubcommand(name string, args []string) (Command, error) {
 		return parseInit(args)
 	case "logs":
 		return parseLogs(args)
+	case "output":
+		return parseOutput(args)
 	case "index":
 		return parseIndex(args)
 	case "describe":
@@ -625,6 +841,10 @@ func parseSubcommand(name string, args []string) (Command, error) {
 		return parseConsolidate(args)
 	case "recall":
 		return parseRecall(args)
+	case "chat":
+		return parseChat(args)
+	case "summarize":
+		return parseSummarize(args)
 	case "list":
 		return parseList(args)
 	case "show":
@@ -632,19 +852,19 @@ func parseSubcommand(name string, args []string) (Command, error) {
 	case "forget":
 		return parseForget(args)
 	default:
-		return nil, apperr.InvalidArguments("Unknown subcommand %s.", name)
+		return nil, newUnknownCommandError(name)
 	}
 }
 
 func parseLogs(args []string) (Command, error) {
 	if len(args) == 0 {
-		return nil, apperr.InvalidArguments("logs requires a subcommand: path, export, or clear.")
+		return nil, newParseError(ParseErrorMissingNestedCommand, "logs", "", "logs requires a subcommand: path, export, or clear.")
 	}
 
 	switch args[0] {
 	case "path":
 		if len(args[1:]) != 0 {
-			return nil, apperr.InvalidArguments("logs path does not accept extra arguments.")
+			return nil, newParseError(ParseErrorDoesNotAcceptArgs, "logs path", "", "logs path does not accept extra arguments.")
 		}
 		return LogsPathCommand{}, nil
 	case "export":
@@ -655,10 +875,10 @@ func parseLogs(args []string) (Command, error) {
 			return nil, err
 		}
 		if output == "" {
-			return nil, apperr.InvalidArguments("logs export requires --output <path>.")
+			return nil, newParseError(ParseErrorMissingRequiredFlag, "logs export", "--output", "logs export requires --output <path>.")
 		}
 		if len(fs.Args()) != 0 {
-			return nil, apperr.InvalidArguments("logs export does not accept positional arguments.")
+			return nil, newParseError(ParseErrorDoesNotAcceptArgs, "logs export", "", "logs export does not accept positional arguments.")
 		}
 		return LogsExportCommand{Output: output}, nil
 	case "clear":
@@ -669,14 +889,111 @@ func parseLogs(args []string) (Command, error) {
 			return nil, err
 		}
 		if len(fs.Args()) != 0 {
-			return nil, apperr.InvalidArguments("logs clear does not accept positional arguments.")
+			return nil, newParseError(ParseErrorDoesNotAcceptArgs, "logs clear", "", "logs clear does not accept positional arguments.")
 		}
 		if !force {
-			return nil, apperr.InvalidArguments("logs clear requires --force.")
+			return nil, newParseError(ParseErrorMissingRequiredFlag, "logs clear", "--force", "logs clear requires --force.")
 		}
 		return LogsClearCommand{Force: true}, nil
 	default:
-		return nil, apperr.InvalidArguments("Unknown logs subcommand %s.", args[0])
+		return nil, newUnknownNestedCommandError("logs", args[0], []string{"path", "export", "clear"})
+	}
+}
+
+func parseOutput(args []string) (Command, error) {
+	if len(args) == 0 {
+		return nil, newParseError(ParseErrorMissingNestedCommand, "output", "", "output requires a subcommand: list, meta, show, head, tail, or slice.")
+	}
+
+	switch args[0] {
+	case "generate":
+		fs := newFlagSet("output generate")
+		var lines int
+		var width int
+		var prefix string
+		fs.IntVar(&lines, "lines", 300, "")
+		fs.IntVar(&width, "width", 120, "")
+		fs.StringVar(&prefix, "prefix", "line", "")
+		if err := fs.Parse(args[1:]); err != nil {
+			return nil, err
+		}
+		if len(fs.Args()) != 0 {
+			return nil, newParseError(ParseErrorDoesNotAcceptArgs, "output generate", "", "output generate does not accept positional arguments.")
+		}
+		if lines <= 0 {
+			return nil, newParseError(ParseErrorInvalidFlagValue, "output generate", "--lines", "Invalid value for --lines: %d.", lines)
+		}
+		if width <= 0 {
+			return nil, newParseError(ParseErrorInvalidFlagValue, "output generate", "--width", "Invalid value for --width: %d.", width)
+		}
+		return OutputGenerateCommand{Lines: lines, Width: width, Prefix: prefix}, nil
+	case "list":
+		if len(args[1:]) != 0 {
+			return nil, newParseError(ParseErrorDoesNotAcceptArgs, "output list", "", "output list does not accept extra arguments.")
+		}
+		return OutputListCommand{}, nil
+	case "meta":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "output meta", "output-id", "output meta requires exactly one output id argument.")
+		}
+		return OutputMetaCommand{ID: args[1]}, nil
+	case "show":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "output show", "output-id", "output show requires exactly one output id argument.")
+		}
+		return OutputShowCommand{ID: args[1]}, nil
+	case "head":
+		if len(args) < 2 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "output head", "output-id", "output head requires exactly one output id argument.")
+		}
+		fs := newFlagSet("output head")
+		var lines int
+		fs.IntVar(&lines, "lines", 100, "")
+		if err := fs.Parse(args[2:]); err != nil {
+			return nil, err
+		}
+		if len(fs.Args()) != 0 {
+			return nil, newParseError(ParseErrorDoesNotAcceptArgs, "output head", "", "output head does not accept extra positional arguments.")
+		}
+		return OutputHeadCommand{ID: args[1], Lines: lines}, nil
+	case "tail":
+		if len(args) < 2 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "output tail", "output-id", "output tail requires exactly one output id argument.")
+		}
+		fs := newFlagSet("output tail")
+		var lines int
+		fs.IntVar(&lines, "lines", 100, "")
+		if err := fs.Parse(args[2:]); err != nil {
+			return nil, err
+		}
+		if len(fs.Args()) != 0 {
+			return nil, newParseError(ParseErrorDoesNotAcceptArgs, "output tail", "", "output tail does not accept extra positional arguments.")
+		}
+		return OutputTailCommand{ID: args[1], Lines: lines}, nil
+	case "slice":
+		if len(args) < 2 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "output slice", "output-id", "output slice requires exactly one output id argument.")
+		}
+		fs := newFlagSet("output slice")
+		var offset int
+		var limit int
+		fs.IntVar(&offset, "offset", -1, "")
+		fs.IntVar(&limit, "limit", 0, "")
+		if err := fs.Parse(args[2:]); err != nil {
+			return nil, err
+		}
+		if len(fs.Args()) != 0 {
+			return nil, newParseError(ParseErrorDoesNotAcceptArgs, "output slice", "", "output slice does not accept extra positional arguments.")
+		}
+		if offset < 0 {
+			return nil, newParseError(ParseErrorMissingRequiredFlag, "output slice", "--offset", "output slice requires --offset <n>.")
+		}
+		if limit <= 0 {
+			return nil, newParseError(ParseErrorMissingRequiredFlag, "output slice", "--limit", "output slice requires --limit <n>.")
+		}
+		return OutputSliceCommand{ID: args[1], Offset: offset, Limit: limit}, nil
+	default:
+		return nil, newUnknownNestedCommandError("output", args[0], []string{"list", "meta", "show", "head", "tail", "slice"})
 	}
 }
 
@@ -688,7 +1005,7 @@ func parseInit(args []string) (Command, error) {
 		return nil, err
 	}
 	if len(fs.Args()) != 0 {
-		return nil, apperr.InvalidArguments("init does not accept positional arguments.")
+		return nil, newParseError(ParseErrorDoesNotAcceptArgs, "init", "", "init does not accept positional arguments.")
 	}
 	return InitCommand{Force: force}, nil
 }
@@ -710,7 +1027,7 @@ func parseIndex(args []string) (Command, error) {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
-		return nil, apperr.InvalidArguments("index requires exactly one path argument.")
+		return nil, newParseError(ParseErrorMissingRequiredArg, "index", "path", "index requires exactly one path argument.")
 	}
 	cmd.Path = fs.Args()[0]
 	cmd.Include = include
@@ -729,10 +1046,10 @@ func parseDescribe(args []string) (Command, error) {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
-		return nil, apperr.InvalidArguments("describe requires exactly one file argument.")
+		return nil, newParseError(ParseErrorMissingRequiredArg, "describe", "file", "describe requires exactly one file argument.")
 	}
 	if !oneOf(cmd.Length, "short", "medium", "long") {
-		return nil, apperr.InvalidArguments("Invalid value for --length: %s.", cmd.Length)
+		return nil, newParseError(ParseErrorInvalidFlagValue, "describe", "--length", "Invalid value for --length: %s.", cmd.Length)
 	}
 	cmd.File = fs.Args()[0]
 	return cmd, nil
@@ -753,7 +1070,7 @@ func parseRemember(args []string) (Command, error) {
 		return nil, err
 	}
 	if len(fs.Args()) > 1 {
-		return nil, apperr.InvalidArguments("remember accepts at most one positional content argument.")
+		return nil, newParseError(ParseErrorTooManyArgs, "remember", "content", "remember accepts at most one positional content argument.")
 	}
 	if len(fs.Args()) == 1 {
 		cmd.Content = fs.Args()[0]
@@ -782,7 +1099,7 @@ func parseConsolidate(args []string) (Command, error) {
 		return nil, err
 	}
 	if len(fs.Args()) != 0 {
-		return nil, apperr.InvalidArguments("consolidate does not accept positional arguments.")
+		return nil, newParseError(ParseErrorDoesNotAcceptArgs, "consolidate", "", "consolidate does not accept positional arguments.")
 	}
 	cmd.Tags = tags
 	return cmd, nil
@@ -806,14 +1123,36 @@ func parseRecall(args []string) (Command, error) {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
-		return nil, apperr.InvalidArguments("recall requires exactly one query argument.")
+		return nil, newParseError(ParseErrorMissingRequiredArg, "recall", "query", "recall requires exactly one query argument.")
 	}
 	if !oneOf(cmd.Tier, "short", "long", "all") {
-		return nil, apperr.InvalidArguments("Invalid value for --tier: %s.", cmd.Tier)
+		return nil, newParseError(ParseErrorInvalidFlagValue, "recall", "--tier", "Invalid value for --tier: %s.", cmd.Tier)
 	}
 	cmd.Query = fs.Args()[0]
 	cmd.Tags = tags
 	return cmd, nil
+}
+
+func parseChat(args []string) (Command, error) {
+	fs := newFlagSet("chat")
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 1 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "chat", "prompt", "chat requires exactly one prompt argument.")
+	}
+	return ChatCommand{Prompt: fs.Args()[0]}, nil
+}
+
+func parseSummarize(args []string) (Command, error) {
+	fs := newFlagSet("summarize")
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 1 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "summarize", "file", "summarize requires exactly one file argument.")
+	}
+	return SummarizeCommand{File: fs.Args()[0]}, nil
 }
 
 func parseList(args []string) (Command, error) {
@@ -834,13 +1173,13 @@ func parseList(args []string) (Command, error) {
 		return nil, err
 	}
 	if len(fs.Args()) != 0 {
-		return nil, apperr.InvalidArguments("list does not accept positional arguments.")
+		return nil, newParseError(ParseErrorDoesNotAcceptArgs, "list", "", "list does not accept positional arguments.")
 	}
 	if !oneOf(cmd.Tier, "short", "long", "all") {
-		return nil, apperr.InvalidArguments("Invalid value for --tier: %s.", cmd.Tier)
+		return nil, newParseError(ParseErrorInvalidFlagValue, "list", "--tier", "Invalid value for --tier: %s.", cmd.Tier)
 	}
 	if !oneOf(cmd.Order, "asc", "desc") {
-		return nil, apperr.InvalidArguments("Invalid value for --order: %s.", cmd.Order)
+		return nil, newParseError(ParseErrorInvalidFlagValue, "list", "--order", "Invalid value for --order: %s.", cmd.Order)
 	}
 	cmd.Tags = tags
 	return cmd, nil
@@ -852,7 +1191,7 @@ func parseShow(args []string) (Command, error) {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
-		return nil, apperr.InvalidArguments("show requires exactly one id argument.")
+		return nil, newParseError(ParseErrorMissingRequiredArg, "show", "id", "show requires exactly one id argument.")
 	}
 	return ShowCommand{ID: fs.Args()[0]}, nil
 }
@@ -865,7 +1204,7 @@ func parseForget(args []string) (Command, error) {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
-		return nil, apperr.InvalidArguments("forget requires exactly one id argument.")
+		return nil, newParseError(ParseErrorMissingRequiredArg, "forget", "id", "forget requires exactly one id argument.")
 	}
 	cmd.ID = fs.Args()[0]
 	return cmd, nil

@@ -3,7 +3,7 @@
 `aascribe` keeps user-facing command output and debug logs separate.
 
 - command results go to stdout
-- logs go to stderr and, when enabled, to a store-local log file
+- logs go to stderr and, when enabled, to a log file alongside the active store directory
 
 This keeps JSON output machine-readable while still giving you useful diagnostics.
 
@@ -22,7 +22,7 @@ Without `--verbose`, `aascribe` still emits important lifecycle and error logs, 
 The standard log file path is:
 
 ```text
-<store>/logs/aascribe.log
+<store-parent>/logs/aascribe.log
 ```
 
 You can ask `aascribe` for the resolved active path:

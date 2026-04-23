@@ -32,7 +32,7 @@ Recommended delivery order:
 ### Task 0.1: Finish the Gemini-backed LLM interface
 
 - Implement the plan in [../plans/llm-interface-plan.md](../plans/llm-interface-plan.md)
-- Follow the config strategy in [config-strategy-tasks.md](./config-strategy-tasks.md)
+- Follow the config strategy in [../archieved/config-strategy-tasks.md](../archieved/config-strategy-tasks.md)
 - Deliver:
   - store-local config loading from `<store>/config.toml`
   - Gemini API key loading via `llm.api_key_env`

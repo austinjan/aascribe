@@ -99,7 +99,7 @@ On error:
 
 ### `init`
 
-Create a new store. Sets up a filesystem-first directory layout for short-term memory, long-term memory, index data, cache data, and layout metadata.
+Create a new store. Sets up a filesystem-first directory layout for short-term memory, long-term memory, index data, cache data, output transport data, and layout metadata.
 
 ```
 aascribe init [--store <path>] [--force]
@@ -125,6 +125,7 @@ aascribe init --store ./project-mem
 - `long_term/`
 - `index/`
 - `cache/`
+- `outputs/`
 - `layout.json`
 
 **Output**
@@ -181,7 +182,7 @@ Example `logs path` output:
 {
   "ok": true,
   "data": {
-    "path": "/Users/you/project-mem/logs/aascribe.log"
+    "path": "/Users/you/logs/aascribe.log"
   },
   "meta": {
     "command": "logs",
@@ -199,7 +200,7 @@ Example `logs export` output:
 {
   "ok": true,
   "data": {
-    "source_path": "/Users/you/project-mem/logs/aascribe.log",
+    "source_path": "/Users/you/logs/aascribe.log",
     "output_path": "/Users/you/aascribe-debug.log"
   },
   "meta": {
@@ -218,7 +219,7 @@ Example `logs clear` output:
 {
   "ok": true,
   "data": {
-    "path": "/Users/you/project-mem/logs/aascribe.log",
+    "path": "/Users/you/logs/aascribe.log",
     "cleared": true
   },
   "meta": {

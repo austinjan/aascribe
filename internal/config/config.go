@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/BurntSushi/toml"
+	"github.com/joho/godotenv"
 
 	"github.com/austinjan/aascribe/internal/apperr"
 	"github.com/austinjan/aascribe/internal/cli"
@@ -103,6 +104,7 @@ func Resolve(storePath string, opts ResolveOptions, lookup LookupEnvFunc) (*Reso
 	if lookup == nil {
 		lookup = os.LookupEnv
 	}
+	lookup = withDotEnvFallback(storePath, lookup)
 
 	cfg, err := Load(storePath)
 	if err != nil {
@@ -224,4 +226,39 @@ func parseFormat(value string) (cli.Format, error) {
 	default:
 		return "", apperr.InvalidArguments("invalid format %q; expected json or text", value)
 	}
+}
+
+func withDotEnvFallback(storePath string, primary LookupEnvFunc) LookupEnvFunc {
+	dotEnvValues := loadDotEnvValues(storePath)
+	return func(key string) (string, bool) {
+		if value, ok := primary(key); ok && value != "" {
+			return value, true
+		}
+		value, ok := dotEnvValues[key]
+		return value, ok
+	}
+}
+
+func loadDotEnvValues(storePath string) map[string]string {
+	values := map[string]string{}
+
+	paths := []string{}
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		paths = append(paths, filepath.Join(cwd, ".env"))
+	}
+	if storePath != "" {
+		paths = append(paths, filepath.Join(storePath, ".env"))
+	}
+
+	for _, path := range paths {
+		parsed, err := godotenv.Read(path)
+		if err != nil {
+			continue
+		}
+		for key, value := range parsed {
+			values[key] = value
+		}
+	}
+
+	return values
 }

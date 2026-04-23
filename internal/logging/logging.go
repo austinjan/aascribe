@@ -44,7 +44,7 @@ func ActiveLogPath(storePath string) string {
 	if storePath == "" {
 		return ""
 	}
-	return filepath.Join(storePath, "logs", "aascribe.log")
+	return filepath.Join(filepath.Dir(storePath), "logs", "aascribe.log")
 }
 
 func (l *Logger) Path() string {
