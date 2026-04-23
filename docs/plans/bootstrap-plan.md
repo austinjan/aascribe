@@ -1,12 +1,12 @@
-# Bootstrap Plan For `aascribe` In Rust
+# Bootstrap Plan For `aascribe` In Go
 
 ## Summary
 
-Bootstrap `aascribe` as a Rust CLI with the full documented command skeleton in place, but only `init` fully implemented in the first phase. The initial store will be filesystem-first rather than database-first, and the usage spec will be updated now so the documented behavior matches reality. The bootstrap should establish the long-term architecture once: shared argument parsing, output envelope handling, error/exit-code mapping, and a command module layout that future subcommands can fill in without structural churn.
+Bootstrap `aascribe` as a Go CLI with the full documented command skeleton in place, but only `init` fully implemented in the first phase. The initial store will be filesystem-first rather than database-first, and the usage spec will be updated now so the documented behavior matches reality. The bootstrap should establish the long-term architecture once: shared argument parsing, output envelope handling, error/exit-code mapping, and a command module layout that future subcommands can fill in without structural churn.
 
 ## Implementation Changes
 
-- Create a Rust binary CLI project with a single entrypoint and internal modules for:
+- Create a Go CLI project with a single entrypoint and internal packages for:
   - command parsing
   - shared output envelope rendering (`json` and `text`)
   - error types and exit-code mapping
@@ -61,7 +61,7 @@ Bootstrap `aascribe` as a Rust CLI with the full documented command skeleton in 
 
 ## Assumptions
 
-- Rust is the implementation language for bootstrap
+- Go is the implementation language for bootstrap
 - The bootstrap should establish the full CLI skeleton now, not only the `init` command
 - Filesystem-first storage is intentional for v1 bootstrap, and the spec should be revised now to match that choice
 - It is acceptable for non-`init` subcommands to exist as parser-visible stubs during bootstrap

@@ -2,52 +2,52 @@
 
 ## Build A Release Binary
 
-Build an optimized release binary with:
+Build the CLI with:
 
 ```bash
-cargo build --release
+go build -o bin/aascribe ./cmd/aascribe
 ```
 
 The compiled binary will be written to:
 
 ```bash
-target/release/aascribe
+bin/aascribe
 ```
 
 Example:
 
 ```bash
-./target/release/aascribe init
+./bin/aascribe init
 ```
 
 ## Run In Dev Mode
 
-For day-to-day development and debugging, run the CLI through Cargo:
+For day-to-day development and debugging, run the CLI directly through `go run`:
 
 ```bash
-cargo run -- <command> [args...]
+go run ./cmd/aascribe -- <command> [args...]
 ```
 
 Examples:
 
 ```bash
-cargo run -- init
-cargo run -- --format text init
-cargo run -- --store ./tmp-store init --force
+go run ./cmd/aascribe -- init
+go run ./cmd/aascribe -- --format text init
+go run ./cmd/aascribe -- --store ./tmp-store init --force
 ```
 
-This uses the debug build, which is slower than `--release` but much better for iterative development and troubleshooting.
+This uses a development build path, which is ideal for fast iteration and troubleshooting.
 
 ## Useful Debug Commands
 
 Run the test suite:
 
 ```bash
-cargo test
+go test ./...
 ```
 
 Format the code:
 
 ```bash
-cargo fmt
+gofmt -w ./cmd ./internal
 ```

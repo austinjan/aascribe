@@ -56,11 +56,11 @@ This document does **not** define:
 
 Every concrete `aascribe` command should declare:
 
-```rust
-struct CommandSpec {
-    path: &'static str,
-    output_shape: &'static str,
-    output_schema_ref: Option<&'static str>,
+```go
+type CommandSpec struct {
+    Path            string
+    OutputShape     string
+    OutputSchemaRef string
 }
 ```
 
@@ -73,11 +73,10 @@ Interpretation:
 
 Example:
 
-```rust
-CommandSpec {
-    path: "recall",
-    output_shape: "MemoryRecallResult",
-    output_schema_ref: None,
+```go
+CommandSpec{
+    Path:        "recall",
+    OutputShape: "MemoryRecallResult",
 }
 ```
 
@@ -166,7 +165,7 @@ Preferred when known:
 
 - The authoritative shape definitions live as checked-in JSON Schema files under [`docs/shapes/`](shapes/README.md).
 - `USAGE.md` command sections must reference these shapes by name.
-- If Rust types later generate schemas, the generated output must either replace this directory explicitly as the new source of truth or stay byte-for-byte aligned with it.
+- If Go types later generate schemas, the generated output must either replace this directory explicitly as the new source of truth or stay byte-for-byte aligned with it.
 
 ---
 

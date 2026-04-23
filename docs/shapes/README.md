@@ -28,4 +28,4 @@ This directory is the checked-in source of truth for `aascribe` command `OutputS
 ## Notes
 
 - Schemas are authored directly as checked-in JSON Schema files for now.
-- If `aascribe` later generates schemas from Rust types, those generated artifacts must still stay aligned with this directory or replace it explicitly as the new source of truth.
+- If `aascribe` later generates schemas from Go types, those generated artifacts must still stay aligned with this directory or replace it explicitly as the new source of truth.

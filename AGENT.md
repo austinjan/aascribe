@@ -5,7 +5,7 @@ Guidance for coding agents working in this repository.
 ## Project Snapshot
 
 - Project name: `aascribe`
-- Current state: early-stage repository with product/CLI behavior documented before implementation
+- Current state: early-stage Go repository with product/CLI behavior documented before implementation
 - Primary source of truth: [docs/USAGE.md](/Users/macmini-au/code/aascribe/docs/USAGE.md)
 
 ## What To Read First
@@ -45,6 +45,6 @@ Guidance for coding agents working in this repository.
 
 ## Current Repository Reality
 
-- `README.md` is currently empty.
-- `docs/USAGE.md` is the only substantive project document at the moment.
+- The repository is bootstrapped as a Go CLI.
+- `docs/USAGE.md` remains the primary product contract.
 - If you add scaffolding, keep it minimal and consistent with the documented CLI surface.

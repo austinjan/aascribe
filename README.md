@@ -1,6 +1,6 @@
 # aascribe
 
-Early-stage CLI for project memory, recall, and indexing.
+Early-stage Go CLI for project memory, recall, and indexing.
 
 ## Docs
 
