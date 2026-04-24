@@ -10,7 +10,7 @@ import (
 
 const layoutVersion = "bootstrap-v1"
 
-var managedDirectories = []string{"short_term", "long_term", "index", "cache", "outputs"}
+var managedDirectories = []string{"short_term", "long_term", "index", "cache", "outputs", "operations"}
 var managedFiles = []string{"layout.json"}
 
 type InitOutcome struct {
@@ -70,6 +70,7 @@ func InitializeStore(path string, force bool) (*InitOutcome, error) {
 			"index":      "index",
 			"cache":      "cache",
 			"outputs":    "outputs",
+			"operations": "operations",
 		},
 	}
 	layoutBytes, err := json.MarshalIndent(layoutDoc, "", "  ")

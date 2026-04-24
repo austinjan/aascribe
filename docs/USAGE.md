@@ -14,6 +14,7 @@ Complete command and flag reference for `aascribe`.
 - [Commands](#commands)
   - [init](#init)
   - [logs](#logs)
+  - [operation](#operation)
   - [index](#index)
   - [map](#map)
   - [describe](#describe)
@@ -54,6 +55,8 @@ Relative values are interpreted as "time ago" for `--since`/`--until` and as "fr
 ---
 
 ## Output envelope
+
+Default text output is optimized for LLM agents. Commands that manage state, inspect status, or return handles should include compact `next:` hints. Commands whose output is the requested content itself, such as `chat`, `summarize`, `describe`, and output chunk readers, keep text output focused on that content.
 
 When you explicitly request `--format json`, every JSON response uses this shape:
 
@@ -127,6 +130,7 @@ aascribe init --store ./project-mem
 - `index/`
 - `cache/`
 - `outputs/`
+- `operations/`
 - `layout.json`
 
 **Output**
@@ -233,6 +237,60 @@ Example `logs clear` output:
 
 ---
 
+### `operation`
+
+Inspect persisted long-running operation state for the active store.
+
+```
+aascribe operation list
+aascribe operation status <operation-id>
+aascribe operation events <operation-id>
+aascribe operation result <operation-id>
+aascribe operation cancel <operation-id>
+```
+
+Subcommands:
+
+- `list`
+  List known operations for the active store.
+- `status <operation-id>`
+  Show the latest lifecycle snapshot for one operation.
+- `events <operation-id>`
+  Show persisted event history for one operation.
+- `result <operation-id>`
+  Show the final result record for one completed operation.
+- `cancel <operation-id>`
+  Mark a pending or running operation as canceled.
+
+Behavior notes:
+
+- Operation lifecycle state is stored under `<store>/operations/<operation-id>/`.
+- `operation.json` is the latest compact status snapshot.
+- `events.jsonl` is append-only event history.
+- `result.json` is written only when a final result is available.
+- `operation result` returns a typed error if the operation has not completed yet.
+- `operation cancel` is idempotent for already canceled operations and rejects operations that already succeeded or failed.
+
+Examples:
+
+```bash
+aascribe operation list
+aascribe operation status op_20260424T120000Z_ab12cd34
+aascribe operation events op_20260424T120000Z_ab12cd34
+aascribe operation result op_20260424T120000Z_ab12cd34
+aascribe operation cancel op_20260424T120000Z_ab12cd34
+```
+
+Output shapes:
+
+- `operation list`: `OperationList`
+- `operation status`: `OperationStatus`
+- `operation events`: `OperationEventList`
+- `operation result`: `OperationResult`
+- `operation cancel`: `OperationCancelResult`
+
+---
+
 ### `index`
 
 Walk a directory, summarize direct files per folder, and persist local metadata.
@@ -250,6 +308,7 @@ aascribe index eval <path>
 | `--include <glob>` | — | Include only matching files. Repeatable |
 | `--exclude <glob>` | `.git`, `node_modules`, `target`, `dist`, `.venv` | Exclude matching files/dirs. Repeatable |
 | `--concurrency <N>` | `4` | Max concurrent direct-file processing jobs across the index run |
+| `--async` | off | Start indexing as a persisted operation and return an `operation_id` immediately |
 | `--refresh` | off | Ignore cache; regenerate summaries |
 | `--no-summary` | off | Return structure only. Much faster |
 | `--max-file-size <bytes>` | `1048576` | Files over this size get metadata only, no summary |
@@ -262,6 +321,7 @@ Behavior notes:
 - Each `.aascribe_index_meta.json` is local-only: it describes the current folder and its direct files, not a full descendant tree.
 - Metadata records persisted file descriptions, non-indexed files, failures, and warnings.
 - `index` uses bounded direct-file concurrency. Increase `--concurrency` to speed up summarize/hash work; keep it low if the LLM backend or machine is the bottleneck.
+- `index --async <path>` creates a persisted operation, starts a background index worker, and returns an `OperationAccepted` payload. Inspect progress with `operation status`, inspect history with `operation events`, and fetch the final result with `operation result`.
 - Re-running `index` reuses unchanged direct-file metadata when possible.
 - `index dirty <path>` marks existing metadata stale so the next `index` run rebuilds it.
 - `index eval <path>` previews which folders and direct files need indexing, plus which ones are unchanged.
@@ -271,13 +331,16 @@ Behavior notes:
 ```bash
 aascribe index --depth 2 --include '*.rs' --include '*.toml' ./src
 aascribe index --concurrency 8 ./src
+aascribe index --async ./src
 aascribe index --no-summary .           # structure-only, fast
 aascribe index --refresh .              # force re-summarize
 aascribe index dirty ./src              # mark existing metadata stale
 aascribe index eval ./src               # preview changed vs unchanged work
 ```
 
-**OutputShape:** `PathIndexTree`
+**OutputShape:** `PathIndexTree` for synchronous `index`
+
+**OutputShape:** `OperationAccepted` for `index --async`
 
 **Output**
 
@@ -316,6 +379,7 @@ aascribe map <path>
 
 Behavior notes:
 
+- `map` is a routing overview for agents. Use it to choose the folder or file to inspect next; for precise answers, inspect the target file directly or re-run `index` without `--no-summary`.
 - `map` reads metadata files; it does not re-summarize source files.
 - `map` applies `.gitignore` and `.aaignore` while traversing child directories.
 - `text` is the default output and returns a compact tree intended to be easier for LLMs to read.

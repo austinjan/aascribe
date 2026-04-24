@@ -220,6 +220,44 @@ func errorGuidance(err error, appErr *apperr.Error, command, store string) (stri
 				"aascribe logs export --output ./aascribe.log",
 			}
 		}
+		if strings.Contains(message, "operation requires a subcommand") || strings.Contains(message, "Unknown operation subcommand") {
+			return "Choose one of the supported operation subcommands.", []string{
+				"aascribe operation list",
+				"aascribe operation status op_20260424T120000Z_ab12cd34",
+				"aascribe operation events op_20260424T120000Z_ab12cd34",
+				"aascribe operation result op_20260424T120000Z_ab12cd34",
+			}
+		}
+		if strings.Contains(message, "operation list does not accept extra arguments") {
+			return "Run `operation list` by itself with no extra arguments.", []string{
+				"aascribe operation list",
+				"aascribe operation status op_20260424T120000Z_ab12cd34",
+			}
+		}
+		if strings.Contains(message, "operation status requires exactly one operation id argument") {
+			return "Pass exactly one operation id to `operation status`.", []string{
+				"aascribe operation list",
+				"aascribe operation status op_20260424T120000Z_ab12cd34",
+			}
+		}
+		if strings.Contains(message, "operation events requires exactly one operation id argument") {
+			return "Pass exactly one operation id to `operation events`.", []string{
+				"aascribe operation list",
+				"aascribe operation events op_20260424T120000Z_ab12cd34",
+			}
+		}
+		if strings.Contains(message, "operation result requires exactly one operation id argument") {
+			return "Pass exactly one operation id to `operation result`.", []string{
+				"aascribe operation list",
+				"aascribe operation result op_20260424T120000Z_ab12cd34",
+			}
+		}
+		if strings.Contains(message, "operation cancel requires exactly one operation id argument") {
+			return "Pass exactly one operation id to `operation cancel`.", []string{
+				"aascribe operation list",
+				"aascribe operation cancel op_20260424T120000Z_ab12cd34",
+			}
+		}
 		if strings.Contains(message, "init does not accept positional arguments") {
 			return "Run `init` without positional arguments; use flags like `--force` or `--store` instead.", []string{
 				"aascribe init",
@@ -391,6 +429,24 @@ func errorGuidance(err error, appErr *apperr.Error, command, store string) (stri
 			"aascribe output meta out_000001",
 			"aascribe output show out_000001",
 		}
+	case "OPERATION_NOT_FOUND":
+		return "That operation id does not exist in the active store. List current operations first and retry with a valid id.", []string{
+			"aascribe operation list",
+			"aascribe operation status op_20260424T120000Z_ab12cd34",
+			"aascribe operation result op_20260424T120000Z_ab12cd34",
+		}
+	case "OPERATION_RESULT_NOT_READY":
+		return "That operation has not completed yet. Inspect its current state or event history, then retry later.", []string{
+			"aascribe operation status op_20260424T120000Z_ab12cd34",
+			"aascribe operation events op_20260424T120000Z_ab12cd34",
+			"aascribe operation result op_20260424T120000Z_ab12cd34",
+		}
+	case "OPERATION_ALREADY_TERMINAL":
+		return "That operation already finished, failed, or was canceled. Inspect status or result instead.", []string{
+			"aascribe operation status op_20260424T120000Z_ab12cd34",
+			"aascribe operation result op_20260424T120000Z_ab12cd34",
+			"aascribe operation list",
+		}
 	default:
 		return "Review the error details, then retry with `--help` or a more specific subcommand.", []string{
 			"aascribe --help",
@@ -483,6 +539,15 @@ func parseErrorGuidance(err *cli.ParseError) (string, []string) {
 				"aascribe output show out_000001",
 			}
 		}
+		if err.Scope == "operation" {
+			return "Choose one of the supported operation subcommands.", []string{
+				"aascribe operation list",
+				"aascribe operation status op_20260424T120000Z_ab12cd34",
+				"aascribe operation events op_20260424T120000Z_ab12cd34",
+				"aascribe operation result op_20260424T120000Z_ab12cd34",
+				"aascribe operation cancel op_20260424T120000Z_ab12cd34",
+			}
+		}
 	case cli.ParseErrorUnknownNestedCommand:
 		if err.Scope == "logs" {
 			if len(err.Suggestions) > 0 {
@@ -503,6 +568,18 @@ func parseErrorGuidance(err *cli.ParseError) (string, []string) {
 				"aascribe output list",
 				"aascribe output meta out_000001",
 				"aascribe output show out_000001",
+			}
+		}
+		if err.Scope == "operation" {
+			if len(err.Suggestions) > 0 {
+				return "That operation subcommand is not recognized. Did you mean one of these?", prefixExamples(err.Suggestions, "aascribe operation ")
+			}
+			return "Double-check the operation subcommand you chose.", []string{
+				"aascribe operation list",
+				"aascribe operation status op_20260424T120000Z_ab12cd34",
+				"aascribe operation events op_20260424T120000Z_ab12cd34",
+				"aascribe operation result op_20260424T120000Z_ab12cd34",
+				"aascribe operation cancel op_20260424T120000Z_ab12cd34",
 			}
 		}
 	case cli.ParseErrorMissingRequiredFlag:
@@ -612,6 +689,26 @@ func parseErrorGuidance(err *cli.ParseError) (string, []string) {
 				"aascribe output show out_000001",
 				"aascribe output meta out_000001",
 			}
+		case "operation status":
+			return "Pass exactly one operation id to `operation status`.", []string{
+				"aascribe operation list",
+				"aascribe operation status op_20260424T120000Z_ab12cd34",
+			}
+		case "operation events":
+			return "Pass exactly one operation id to `operation events`.", []string{
+				"aascribe operation list",
+				"aascribe operation events op_20260424T120000Z_ab12cd34",
+			}
+		case "operation result":
+			return "Pass exactly one operation id to `operation result`.", []string{
+				"aascribe operation list",
+				"aascribe operation result op_20260424T120000Z_ab12cd34",
+			}
+		case "operation cancel":
+			return "Pass exactly one operation id to `operation cancel`.", []string{
+				"aascribe operation list",
+				"aascribe operation cancel op_20260424T120000Z_ab12cd34",
+			}
 		}
 	case cli.ParseErrorDoesNotAcceptArgs:
 		switch err.Scope {
@@ -657,6 +754,11 @@ func parseErrorGuidance(err *cli.ParseError) (string, []string) {
 				"aascribe output list",
 				"aascribe output meta out_000001",
 				"aascribe output show out_000001",
+			}
+		case "operation list":
+			return "Run `operation list` by itself with no extra arguments.", []string{
+				"aascribe operation list",
+				"aascribe operation status op_20260424T120000Z_ab12cd34",
 			}
 		case "output generate":
 			return "Run `output generate` without positional arguments; use flags like `--lines`, `--width`, and `--prefix` instead.", []string{

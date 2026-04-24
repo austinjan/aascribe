@@ -42,14 +42,15 @@ Done in the current repo:
 - managed oversized output transport already exists through the `output` command family
 - `index` already has engine-level context propagation for cancellation-sensitive work
 - `index` already has enough internal stage boundaries to become the first real operation candidate
+- checked-in lifecycle shapes now exist in [../shapes](../shapes/README.md) for accepted, status, events, result, and list payloads
+- the first operation inspection command surface now exists: `list`, `status`, `events`, `result`, and `cancel`
 
 Still intentionally incomplete:
 
-- there is no shared persisted operation lifecycle yet
-- there is no operation id, status, event log, or cancel surface
-- long-running commands still block the caller until completion
-- no command can yet return an accepted operation handle and be inspected later
-- final results and long-running lifecycle are still coupled to one synchronous call
+- `index --async` exists, but binary smoke testing is still pending
+- final operation results are stored directly in `result.json`; oversized result integration with managed output transport is not done yet
+- operation retention and cleanup policy are not done yet
+- async support is opt-in per command; `index` is the first supported command
 
 ## Scope And Sequencing
 
@@ -191,10 +192,11 @@ Concrete first-step recommendation:
 Recommended new shapes:
 
 - `OperationAccepted`
+- `OperationCancelResult`
 - `OperationStatus`
 - `OperationEventList`
 - `OperationResult`
-- `OperationSummary`
+- `OperationList`
 
 ### `OperationAccepted`
 
@@ -372,12 +374,19 @@ This gives a clean separation:
 
 ### Task 0.1: Define the operation contract
 
-Status: not started.
+Status: completed.
 
 - settle the lifecycle states
 - settle the minimum command surface
 - settle whether async mode is explicit per command, through `operation start`, or both
 - define how operation lifecycle shapes relate to command-specific output shapes
+
+Completed outputs:
+
+- lifecycle contract documented in this task doc
+- state model settled to `pending`, `running`, `succeeded`, `failed`, `canceled` for the first milestone
+- command-specific output shapes explicitly kept separate from operation lifecycle shapes
+- initial checked-in lifecycle shape set added under [../shapes](../shapes/README.md)
 
 Concrete cases:
 
@@ -388,11 +397,19 @@ Concrete cases:
 
 ### Task 0.2: Define the store layout
 
-Status: not started.
+Status: completed.
 
 - decide where operations live under the active store
 - decide whether results are embedded, referenced, or both
 - decide retention/cleanup expectations
+
+Completed outputs:
+
+- operations now persist under `<store>/operations/<operation-id>/`
+- snapshot file is `operation.json`
+- append-only event log is `events.jsonl`
+- final result file is `result.json`
+- store initialization now creates the `operations` managed directory
 
 Concrete cases:
 
@@ -419,7 +436,7 @@ Concrete cases:
 
 ### Task 1.1: Add operation models
 
-Status: not started.
+Status: completed.
 
 - add Go types for:
   - accepted
@@ -434,9 +451,18 @@ Concrete cases:
 - lifecycle fields such as `state`, `stage`, and `progress` stay stable across commands
 - shape files in `docs/shapes` are distinct from command result shapes
 
+Completed outputs:
+
+- [../shapes/OperationAccepted.schema.json](../shapes/OperationAccepted.schema.json)
+- [../shapes/OperationStatus.schema.json](../shapes/OperationStatus.schema.json)
+- [../shapes/OperationEventList.schema.json](../shapes/OperationEventList.schema.json)
+- [../shapes/OperationResult.schema.json](../shapes/OperationResult.schema.json)
+- [../shapes/OperationList.schema.json](../shapes/OperationList.schema.json)
+- `internal/operation` Go types now mirror the same lifecycle model
+
 ### Task 1.2: Add operation persistence
 
-Status: not started.
+Status: completed.
 
 - create operation directories/files under the active store
 - atomically persist status snapshots
@@ -449,9 +475,16 @@ Concrete cases:
 - appending an event never truncates earlier events
 - process interruption between events and snapshot updates still leaves a recoverable operation
 
+Completed outputs:
+
+- `internal/operation` now persists `operation.json`, `events.jsonl`, and `result.json`
+- status snapshots use atomic replace semantics through temp-file rename
+- event appends are isolated to append-only writes
+- read/list helpers exist for later `operation ...` command wiring
+
 ### Task 1.3: Add operation IDs
 
-Status: not started.
+Status: completed.
 
 - generate stable operation IDs
 - ensure they are easy for both humans and agents to copy/reference
@@ -462,11 +495,16 @@ Concrete cases:
 - IDs are unique across multiple rapid starts
 - IDs remain stable across status/event/result lookups
 
+Completed outputs:
+
+- operation ids now use `op_<utc-stamp>_<hex-suffix>`
+- ids are persisted as the directory name and lookup key for status/events/result
+
 ## Phase 2: Operation Command Surface
 
 ### Task 2.1: Add `operation status`
 
-Status: not started.
+Status: completed.
 
 - inspect one operation
 - return current lifecycle state and compact progress
@@ -477,9 +515,15 @@ Concrete cases:
 - completed operation shows completion metadata
 - unknown operation id returns a typed not-found error
 
+Completed outputs:
+
+- `aascribe operation status <operation-id>` now loads persisted lifecycle snapshots
+- text mode returns compact state/stage/progress lines
+- JSON mode returns the `OperationStatus` payload shape
+
 ### Task 2.2: Add `operation events`
 
-Status: not started.
+Status: completed.
 
 - return event history
 - support bounded/default views if the event list grows large
@@ -490,9 +534,15 @@ Concrete cases:
 - text mode returns compact event lines
 - JSON mode returns structured events with timestamps and levels
 
+Completed outputs:
+
+- `aascribe operation events <operation-id>` now reads `events.jsonl`
+- text mode renders compact event history lines
+- JSON mode returns the `OperationEventList` payload shape
+
 ### Task 2.3: Add `operation result`
 
-Status: not started.
+Status: completed.
 
 - return the final payload or output reference
 - fail cleanly when the operation is not done yet
@@ -504,9 +554,15 @@ Concrete cases:
 - running operation returns a typed "not complete" style error rather than empty success
 - failed or canceled operation returns lifecycle-aware result metadata
 
+Completed outputs:
+
+- `aascribe operation result <operation-id>` now reads persisted `result.json`
+- not-yet-ready results return `OPERATION_RESULT_NOT_READY`
+- JSON mode returns the `OperationResult` payload shape
+
 ### Task 2.4: Add `operation cancel`
 
-Status: not started.
+Status: completed.
 
 - mark the operation as canceled
 - propagate cancellation into the running engine through context
@@ -517,9 +573,16 @@ Concrete cases:
 - canceling a completed operation is rejected cleanly
 - repeated cancel requests are idempotent or clearly rejected, but never corrupt state
 
+Completed outputs:
+
+- `aascribe operation cancel <operation-id>` now marks pending/running operations canceled
+- canceled operations get terminal `OperationStatus` and `OperationResult` records
+- already canceled operations return an idempotent cancel result
+- succeeded or failed operations reject cancellation with `OPERATION_ALREADY_TERMINAL`
+
 ### Task 2.5: Add `operation list`
 
-Status: not started.
+Status: completed.
 
 - list recent operations
 - include enough metadata for follow-up inspection
@@ -530,11 +593,17 @@ Concrete cases:
 - JSON mode includes ids, command names, states, and timestamps
 - large operation history can later be combined with output transport if needed
 
+Completed outputs:
+
+- `aascribe operation list` now lists persisted operation snapshots for the active store
+- text mode returns compact one-line summaries
+- JSON mode returns the `OperationList` payload shape
+
 ## Phase 3: Engine Integration
 
 ### Task 3.1: Add a shared operation reporter
 
-Status: not started.
+Status: completed.
 
 - allow command engines to emit:
   - stage changes
@@ -547,9 +616,15 @@ Concrete cases:
 - the reporter can update counts such as `current` / `total`
 - engines do not need to know whether the caller is using text or JSON mode
 
+Completed outputs:
+
+- `internal/operation.Reporter` now updates status snapshots and appends events through one command-neutral API
+- reporter updates support stage, message, progress, level, and structured event data
+- reporter tests verify status persistence and event history writes together
+
 ### Task 3.2: Integrate cancellation
 
-Status: partially started in `index` engine only.
+Status: completed for `index --async`; not generalized to future commands.
 
 - thread `context.Context` into long-running engines
 - ensure cancellation updates operation state consistently
@@ -557,9 +632,8 @@ Status: partially started in `index` engine only.
 
 Current gap:
 
-- `index` already has internal context-aware work
-- there is no shared operation cancellation lifecycle yet
-- other commands do not yet have a common cancel/report path
+- `index --async` watches persisted operation state and cancels its context when `operation cancel` marks the operation canceled
+- future commands will need to opt into the same cancellation pattern
 
 Concrete cases:
 
@@ -569,7 +643,7 @@ Concrete cases:
 
 ### Task 3.3: Integrate `index` first
 
-Status: not started.
+Status: implemented; smoke testing pending.
 
 - run `index` through the shared operation lifecycle in long-running mode
 - report folder/file scan stages
@@ -583,9 +657,17 @@ Concrete cases:
 - `operation events` shows notable transitions such as reused files, dirty metadata, canceled run, final success
 - `operation result` returns the same command-level payload shape as synchronous `index`, just wrapped through the lifecycle path
 
+Completed outputs:
+
+- `aascribe index --async <path>` now creates an `OperationAccepted` payload and starts a background worker process
+- the worker runs through hidden internal `operation run-index` plumbing
+- operation status moves through pending/running/terminal states
+- final index result is persisted to `result.json`
+- cancellation is observed by the async worker through operation status polling and `context.Context`
+
 ### Task 3.4: Keep synchronous mode intact
 
-Status: not started.
+Status: completed.
 
 - the existing synchronous command path must remain available
 - async operation mode must not silently change the existing `index` envelope contract
@@ -595,6 +677,12 @@ Concrete cases:
 - `aascribe index ./docs` still behaves synchronously
 - `aascribe index --async ./docs` or equivalent enters operation mode
 - result payload parity between sync and async modes is verified
+
+Completed outputs:
+
+- synchronous `index` still returns `PathIndexTree`
+- async `index` returns `OperationAccepted`
+- async final result is retrieved through `operation result`
 
 ## Phase 4: Output Transport Integration
 

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/OperationList",
+  "title": "OperationList",
+  "description": "List wrapper for summarized long-running aascribe operations.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["pending", "running", "succeeded", "failed", "canceled"]
+          },
+          "stage": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": ["operation_id", "command", "state", "stage", "started_at", "updated_at"]
+      }
+    }
+  },
+  "required": ["count", "items"]
+}

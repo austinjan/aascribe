@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/OperationResult",
+  "title": "OperationResult",
+  "description": "Final result payload for a completed or terminal long-running aascribe operation.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "operation_id": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["succeeded", "failed", "canceled"]
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    },
+    "output_id": {
+      "type": "string"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": ["code", "message"]
+    }
+  },
+  "required": ["operation_id", "state", "completed_at", "truncated"]
+}

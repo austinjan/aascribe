@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/OperationAccepted",
+  "title": "OperationAccepted",
+  "description": "Accepted payload returned immediately after starting a long-running aascribe operation.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "operation_id": {
+      "type": "string"
+    },
+    "command": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["pending", "running", "succeeded", "failed", "canceled"]
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status_hint": {
+      "type": "string"
+    },
+    "result_hint": {
+      "type": "string"
+    },
+    "cancel_hint": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "operation_id",
+    "command",
+    "state",
+    "started_at",
+    "status_hint",
+    "result_hint",
+    "cancel_hint"
+  ]
+}

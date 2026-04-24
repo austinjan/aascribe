@@ -67,6 +67,18 @@ func NotFoundOutput(id string) *Error {
 	return newError("OUTPUT_NOT_FOUND", ExitNotFound, "No stored output with id %s.", id)
 }
 
+func OperationNotFound(id string) *Error {
+	return newError("OPERATION_NOT_FOUND", ExitNotFound, "No stored operation with id %s.", id)
+}
+
+func OperationResultNotReady(id string) *Error {
+	return newError("OPERATION_RESULT_NOT_READY", ExitGeneralRuntimeError, "Operation %s has not completed yet.", id)
+}
+
+func OperationAlreadyTerminal(id string) *Error {
+	return newError("OPERATION_ALREADY_TERMINAL", ExitGeneralRuntimeError, "Operation %s is already in a terminal state.", id)
+}
+
 func NotImplemented(command string) *Error {
 	return newError("NOT_IMPLEMENTED", ExitGeneralRuntimeError, "The command `%s` is not implemented yet.", command)
 }

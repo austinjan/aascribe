@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/austinjan/aascribe/internal/cli"
+	"github.com/austinjan/aascribe/internal/operation"
 	"github.com/austinjan/aascribe/internal/store"
 	"github.com/austinjan/aascribe/pkg/llmoutput"
 )
@@ -93,6 +94,34 @@ func TestParseOutputGenerate(t *testing.T) {
 	}
 }
 
+func TestParseOperationStatus(t *testing.T) {
+	parsed, err := cli.Parse([]string{"operation", "status", "op_demo"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.OperationStatusCommand)
+	if !ok {
+		t.Fatalf("expected operation status command, got %#v", parsed.Command)
+	}
+	if cmd.ID != "op_demo" {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
+func TestParseOperationCancel(t *testing.T) {
+	parsed, err := cli.Parse([]string{"operation", "cancel", "op_demo"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.OperationCancelCommand)
+	if !ok {
+		t.Fatalf("expected operation cancel command, got %#v", parsed.Command)
+	}
+	if cmd.ID != "op_demo" {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
 func TestParseIndexClean(t *testing.T) {
 	parsed, err := cli.Parse([]string{"index", "clean", "./tests", "--dry-run", "--force"})
 	if err != nil {
@@ -117,6 +146,20 @@ func TestParseIndexConcurrency(t *testing.T) {
 		t.Fatalf("expected index command, got %#v", parsed.Command)
 	}
 	if cmd.Path != "./tests" || cmd.Concurrency != 6 {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
+func TestParseIndexAsync(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "--async", "./tests"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.IndexCommand)
+	if !ok {
+		t.Fatalf("expected index command, got %#v", parsed.Command)
+	}
+	if cmd.Path != "./tests" || !cmd.Async {
 		t.Fatalf("unexpected parsed command: %#v", cmd)
 	}
 }
@@ -253,6 +296,97 @@ func TestRunOutputHelpIncludesSubcommandsAndExamples(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "aascribe output slice out_000001 --offset 4000 --limit 4000") {
 		t.Fatalf("expected output slice example, got %q", rendered)
+	}
+}
+
+func TestRunOperationHelpIncludesSubcommandsAndExamples(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"operation", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, "Subcommands:") {
+		t.Fatalf("expected operation subcommands section, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "aascribe operation status") {
+		t.Fatalf("expected operation status example, got %q", rendered)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+}
+
+func TestRunOperationStatusReturnsJSONPayload(t *testing.T) {
+	storePath := t.TempDir()
+	accepted, err := operation.Create(storePath, operation.CreateInput{
+		Command: "index",
+		Stage:   "starting",
+		Message: "Preparing index operation.",
+	})
+	if err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := Run([]string{"--format", "json", "--store", storePath, "operation", "status", accepted.OperationID}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d with stdout=%s stderr=%s", status, stdout.String(), stderr.String())
+	}
+
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			OperationID string `json:"operation_id"`
+			Command     string `json:"command"`
+			State       string `json:"state"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected valid json output, got %v", err)
+	}
+	if !payload.OK || payload.Data.OperationID != accepted.OperationID || payload.Data.Command != "index" {
+		t.Fatalf("unexpected payload: %s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "command started") || !strings.Contains(stderr.String(), "command finished") {
+		t.Fatalf("expected command lifecycle logs on stderr, got %q", stderr.String())
+	}
+}
+
+func TestRunOperationCancelReturnsJSONPayload(t *testing.T) {
+	storePath := t.TempDir()
+	accepted, err := operation.Create(storePath, operation.CreateInput{
+		Command: "index",
+		Stage:   "starting",
+		Message: "Preparing index operation.",
+	})
+	if err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := Run([]string{"--format", "json", "--store", storePath, "operation", "cancel", accepted.OperationID}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d with stdout=%s stderr=%s", status, stdout.String(), stderr.String())
+	}
+
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			OperationID string `json:"operation_id"`
+			State       string `json:"state"`
+			Message     string `json:"message"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected valid json output, got %v", err)
+	}
+	if !payload.OK || payload.Data.OperationID != accepted.OperationID || payload.Data.State != "canceled" {
+		t.Fatalf("unexpected payload: %s", stdout.String())
 	}
 }
 
@@ -683,6 +817,9 @@ func TestRunMapTextReturnsCompactTree(t *testing.T) {
 	}
 
 	rendered := stdout.String()
+	if !strings.Contains(rendered, "map is a routing overview") {
+		t.Fatalf("expected routing precision guidance in text output, got %q", rendered)
+	}
 	if !strings.Contains(rendered, filepath.Clean(root)) {
 		t.Fatalf("expected root path in text output, got %q", rendered)
 	}
@@ -751,7 +888,7 @@ func TestRunMapUnindexedNodeUsesSimpleStateAndGuide(t *testing.T) {
 	if level2.State != "unindexed" {
 		t.Fatalf("expected unindexed state, got %#v", level2)
 	}
-	if payload.Data.StateGuide["unindexed"] == "" || payload.Data.StateGuide["ready"] == "" {
+	if payload.Data.StateGuide["unindexed"] == "" || payload.Data.StateGuide["ready"] == "" || payload.Data.StateGuide["precision"] == "" {
 		t.Fatalf("expected state guide entries, got %#v", payload.Data.StateGuide)
 	}
 }
@@ -956,6 +1093,7 @@ func TestInitCreatesExpectedLayout(t *testing.T) {
 	assertExists(t, filepath.Join(storePath, "index"))
 	assertExists(t, filepath.Join(storePath, "cache"))
 	assertExists(t, filepath.Join(storePath, "outputs"))
+	assertExists(t, filepath.Join(storePath, "operations"))
 	assertExists(t, filepath.Join(storePath, "layout.json"))
 }
 
@@ -1003,8 +1141,12 @@ func TestInitReportsTextOutput(t *testing.T) {
 		t.Fatalf("expected success status, got %d", status)
 	}
 	expected := "Initialized aascribe store at " + storePath
-	if strings.TrimSpace(stdout.String()) != expected {
-		t.Fatalf("expected %q, got %q", expected, strings.TrimSpace(stdout.String()))
+	rendered := strings.TrimSpace(stdout.String())
+	if !strings.Contains(rendered, expected) {
+		t.Fatalf("expected %q in output, got %q", expected, rendered)
+	}
+	if !strings.Contains(rendered, "next: aascribe logs path") {
+		t.Fatalf("expected next-step hint, got %q", rendered)
 	}
 }
 

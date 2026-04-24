@@ -430,6 +430,7 @@ func BuildMap(path string) (*PathIndexMap, error) {
 		Root: root,
 		StateGuide: map[string]string{
 			"dirty":     "Metadata exists but is marked stale. Re-run index before trusting it.",
+			"precision": "Map is a routing overview. For precise answers, inspect the target file directly or re-run index without --no-summary.",
 			"ready":     "Metadata exists for this directory. Use the summary and files shown here first.",
 			"unindexed": "No metadata file exists for this directory yet. If needed, inspect the directory directly or run index on it.",
 		},

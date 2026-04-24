@@ -105,6 +105,7 @@ type IndexCommand struct {
 	Include     []string
 	Exclude     []string
 	Concurrency int
+	Async       bool
 	Refresh     bool
 	NoSummary   bool
 	MaxFileSize int64
@@ -143,6 +144,41 @@ type MapCommand struct {
 }
 
 func (c MapCommand) Name() string { return "map" }
+
+type OperationListCommand struct{}
+
+func (c OperationListCommand) Name() string { return "operation" }
+
+type OperationStatusCommand struct {
+	ID string
+}
+
+func (c OperationStatusCommand) Name() string { return "operation" }
+
+type OperationEventsCommand struct {
+	ID string
+}
+
+func (c OperationEventsCommand) Name() string { return "operation" }
+
+type OperationResultCommand struct {
+	ID string
+}
+
+func (c OperationResultCommand) Name() string { return "operation" }
+
+type OperationCancelCommand struct {
+	ID string
+}
+
+func (c OperationCancelCommand) Name() string { return "operation" }
+
+type OperationRunIndexCommand struct {
+	OperationID string
+	Index       IndexCommand
+}
+
+func (c OperationRunIndexCommand) Name() string { return "operation" }
 
 type DescribeCommand struct {
 	File    string
@@ -284,6 +320,7 @@ Commands:
   init         Create or reinitialize the local memory store layout
   logs         Inspect, export, or clear aascribe logs
   output       Browse stored oversized outputs for LLM-safe continuation
+  operation    Inspect persisted long-running operation state
   index        Index a folder for later retrieval and summarization
   describe     Summarize one file with optional length and focus controls
   remember     Write a short-term memory item
@@ -318,6 +355,11 @@ Current Implementation Status:
     output head
     output tail
     output slice
+    operation list
+    operation status
+    operation events
+    operation result
+    operation cancel
     index
     index clean
     describe
@@ -547,6 +589,77 @@ Usage:
 Examples:
   aascribe output slice out_000001 --offset 4000 --limit 4000
 `)
+	case "operation":
+		return strings.TrimSpace(`
+aascribe operation - inspect persisted long-running operation state
+
+Purpose:
+  Help an agent inspect status, event history, and final results for persisted long-running operations.
+
+Subcommands:
+  list      List known operations for the active store
+  status    Show the latest lifecycle snapshot for one operation
+  events    Show the persisted event history for one operation
+  result    Show the final result record for one completed operation
+  cancel    Mark a pending or running operation as canceled
+
+Examples:
+  aascribe operation list
+  aascribe operation status op_20260424T120000Z_ab12cd34
+  aascribe operation events op_20260424T120000Z_ab12cd34
+  aascribe operation result op_20260424T120000Z_ab12cd34
+  aascribe operation cancel op_20260424T120000Z_ab12cd34
+`)
+	case "operation list":
+		return strings.TrimSpace(`
+aascribe operation list - list persisted operations for the active store
+
+Usage:
+  aascribe operation list
+
+Examples:
+  aascribe operation list
+`)
+	case "operation status":
+		return strings.TrimSpace(`
+aascribe operation status - show the latest lifecycle snapshot for one operation
+
+Usage:
+  aascribe operation status <operation-id>
+
+Examples:
+  aascribe operation status op_20260424T120000Z_ab12cd34
+`)
+	case "operation events":
+		return strings.TrimSpace(`
+aascribe operation events - show persisted event history for one operation
+
+Usage:
+  aascribe operation events <operation-id>
+
+Examples:
+  aascribe operation events op_20260424T120000Z_ab12cd34
+`)
+	case "operation result":
+		return strings.TrimSpace(`
+aascribe operation result - show the final result record for one completed operation
+
+Usage:
+  aascribe operation result <operation-id>
+
+Examples:
+  aascribe operation result op_20260424T120000Z_ab12cd34
+`)
+	case "operation cancel":
+		return strings.TrimSpace(`
+aascribe operation cancel - mark a pending or running operation as canceled
+
+Usage:
+  aascribe operation cancel <operation-id>
+
+Examples:
+  aascribe operation cancel op_20260424T120000Z_ab12cd34
+`)
 	case "index":
 		return strings.TrimSpace(`
 aascribe index - index one path for later recall and summarization
@@ -565,6 +678,7 @@ Behavior:
   Detect text files from file content instead of filename extension.
   Write .aascribe_index_meta.json in each indexed folder with local-only metadata for that folder.
   Use --concurrency to bound direct-file processing across the whole index run.
+  Use --async to start index as an operation and inspect it later with operation status/events/result.
   Use index dirty to mark existing metadata stale so the next index run rebuilds it.
   Use index eval to preview which folders and direct files need indexing and which ones are unchanged.
   Use index clean to remove generated .aascribe_index_meta.json files recursively.
@@ -573,6 +687,7 @@ Examples:
   aascribe index .
   aascribe index --depth 2 ./internal
   aascribe index --concurrency 4 ./internal
+  aascribe index --async ./internal
   aascribe --store ./project-mem index --exclude vendor .
   aascribe index dirty ./internal
   aascribe index eval ./internal
@@ -862,6 +977,12 @@ func classifyHelpTopic(tokens []string) string {
 		}
 		return "output"
 	}
+	if tokens[0] == "operation" {
+		if len(tokens) > 1 {
+			return "operation " + tokens[1]
+		}
+		return "operation"
+	}
 	return tokens[0]
 }
 
@@ -943,6 +1064,8 @@ func parseSubcommand(name string, args []string) (Command, error) {
 		return parseLogs(args)
 	case "output":
 		return parseOutput(args)
+	case "operation":
+		return parseOperation(args)
 	case "index":
 		return parseIndex(args)
 	case "map":
@@ -1124,6 +1247,44 @@ func parseInit(args []string) (Command, error) {
 	return InitCommand{Force: force}, nil
 }
 
+func parseOperation(args []string) (Command, error) {
+	if len(args) == 0 {
+		return nil, newParseError(ParseErrorMissingNestedCommand, "operation", "", "operation requires a subcommand: list, status, events, result, or cancel.")
+	}
+
+	switch args[0] {
+	case "list":
+		if len(args[1:]) != 0 {
+			return nil, newParseError(ParseErrorDoesNotAcceptArgs, "operation list", "", "operation list does not accept extra arguments.")
+		}
+		return OperationListCommand{}, nil
+	case "status":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "operation status", "operation-id", "operation status requires exactly one operation id argument.")
+		}
+		return OperationStatusCommand{ID: args[1]}, nil
+	case "events":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "operation events", "operation-id", "operation events requires exactly one operation id argument.")
+		}
+		return OperationEventsCommand{ID: args[1]}, nil
+	case "result":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "operation result", "operation-id", "operation result requires exactly one operation id argument.")
+		}
+		return OperationResultCommand{ID: args[1]}, nil
+	case "cancel":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "operation cancel", "operation-id", "operation cancel requires exactly one operation id argument.")
+		}
+		return OperationCancelCommand{ID: args[1]}, nil
+	case "run-index":
+		return parseOperationRunIndex(args[1:])
+	default:
+		return nil, newUnknownNestedCommandError("operation", args[0], []string{"list", "status", "events", "result", "cancel"})
+	}
+}
+
 func parseIndex(args []string) (Command, error) {
 	if len(args) > 0 && args[0] == "clean" {
 		return parseIndexClean(args[1:])
@@ -1148,6 +1309,7 @@ func parseIndex(args []string) (Command, error) {
 	fs.Var(&include, "include", "")
 	fs.Var(&exclude, "exclude", "")
 	fs.IntVar(&cmd.Concurrency, "concurrency", 4, "")
+	fs.BoolVar(&cmd.Async, "async", false, "")
 	fs.BoolVar(&cmd.Refresh, "refresh", false, "")
 	fs.BoolVar(&cmd.NoSummary, "no-summary", false, "")
 	fs.Int64Var(&cmd.MaxFileSize, "max-file-size", 1_048_576, "")
@@ -1164,6 +1326,22 @@ func parseIndex(args []string) (Command, error) {
 	cmd.Include = include
 	cmd.Exclude = exclude
 	return cmd, nil
+}
+
+func parseOperationRunIndex(args []string) (Command, error) {
+	if len(args) == 0 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "operation run-index", "operation-id", "operation run-index requires an operation id argument.")
+	}
+	cmd, err := parseIndex(args[1:])
+	if err != nil {
+		return nil, err
+	}
+	indexCmd := cmd.(IndexCommand)
+	indexCmd.Async = false
+	return OperationRunIndexCommand{
+		OperationID: args[0],
+		Index:       indexCmd,
+	}, nil
 }
 
 func parseIndexMap(args []string) (Command, error) {

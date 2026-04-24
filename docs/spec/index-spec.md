@@ -20,6 +20,7 @@ aascribe index <path>
   [--depth <n>]
   [--include <glob>]...
   [--exclude <glob>]...
+  [--async]
   [--refresh]
   [--no-summary]
   [--max-file-size <bytes>]
@@ -31,11 +32,21 @@ aascribe index <path>
 | `--depth`         | int        | `3`         | Maximum directory depth. `0` = root only; negative = unlimited.          |
 | `--include`       | glob (×N)  | `[]`        | Whitelist applied to files only. Empty list means "include all files."   |
 | `--exclude`       | glob (×N)  | `[]`        | Blacklist applied to both files and directories.                         |
+| `--async`         | bool       | `false`     | Start indexing as a persisted operation and return `OperationAccepted`.   |
 | `--refresh`       | bool       | `false`     | Reserved for incremental re-indexing. Accepted but not yet consumed.     |
 | `--no-summary`    | bool       | `false`     | Skip all summarization. Files are still walked, hashed, and recorded.    |
 | `--max-file-size` | int64      | `1_048_576` | Byte ceiling for summarization. `0` is valid; negative is rejected.      |
 
 Exactly one positional path argument is required. Zero or multiple positional args return a parse error.
+
+When `--async` is set, the parent command creates a persisted operation under the active store, starts a background index worker process, and returns an `OperationAccepted` payload. The worker writes lifecycle snapshots to `<store>/operations/<operation-id>/operation.json`, event history to `events.jsonl`, and the final `PathIndexTree` result to `result.json`.
+
+Follow-up inspection uses:
+
+- `aascribe operation status <operation-id>`
+- `aascribe operation events <operation-id>`
+- `aascribe operation result <operation-id>`
+- `aascribe operation cancel <operation-id>`
 
 ### 2.2 `aascribe index clean <path>`
 

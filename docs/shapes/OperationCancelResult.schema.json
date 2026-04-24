@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/OperationCancelResult",
+  "title": "OperationCancelResult",
+  "description": "Payload returned after canceling or re-canceling a long-running aascribe operation.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "operation_id": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["canceled"]
+    },
+    "canceled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "message": {
+      "type": "string"
+    }
+  },
+  "required": ["operation_id", "state", "canceled_at", "message"]
+}

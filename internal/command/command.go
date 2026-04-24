@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/austinjan/aascribe/internal/apperr"
 	"github.com/austinjan/aascribe/internal/cli"
@@ -15,6 +17,7 @@ import (
 	"github.com/austinjan/aascribe/internal/index"
 	"github.com/austinjan/aascribe/internal/llm"
 	"github.com/austinjan/aascribe/internal/logging"
+	"github.com/austinjan/aascribe/internal/operation"
 	"github.com/austinjan/aascribe/internal/output"
 	"github.com/austinjan/aascribe/internal/store"
 	"github.com/austinjan/aascribe/pkg/llmoutput"
@@ -46,6 +49,18 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 		return runOutputTail(storePath, cmd.ID, cmd.Lines)
 	case cli.OutputSliceCommand:
 		return runOutputSlice(storePath, cmd.ID, cmd.Offset, cmd.Limit)
+	case cli.OperationListCommand:
+		return runOperationList(storePath)
+	case cli.OperationStatusCommand:
+		return runOperationStatus(storePath, cmd.ID)
+	case cli.OperationEventsCommand:
+		return runOperationEvents(storePath, cmd.ID)
+	case cli.OperationResultCommand:
+		return runOperationResult(storePath, cmd.ID)
+	case cli.OperationCancelCommand:
+		return runOperationCancel(storePath, cmd.ID)
+	case cli.OperationRunIndexCommand:
+		return runOperationRunIndex(storePath, cmd.OperationID, cmd.Index)
 	case cli.IndexCommand:
 		return runIndex(storePath, cmd)
 	case cli.IndexCleanCommand:
@@ -81,7 +96,12 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 	}
 }
 
+var startAsyncIndexProcess = startIndexWorkerProcess
+
 func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, error) {
+	if cmd.Async {
+		return runIndexAsync(storePath, cmd)
+	}
 	summarizer := buildLLMSummarizer(storePath)
 	result, err := index.Build(index.Options{
 		Root:                cmd.Path,
@@ -105,6 +125,206 @@ func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, er
 	}, nil
 }
 
+func runIndexAsync(storePath string, cmd cli.IndexCommand) (*output.CommandResult, error) {
+	accepted, err := operation.Create(storePath, operation.CreateInput{
+		Command: "index",
+		Stage:   "queued",
+		Message: "Index operation accepted.",
+		State:   operation.StatePending,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := startAsyncIndexProcess(storePath, accepted.OperationID, cmd); err != nil {
+		status, loadErr := operation.LoadStatus(storePath, accepted.OperationID)
+		if loadErr == nil {
+			now := time.Now().UTC().Format(time.RFC3339)
+			status.State = operation.StateFailed
+			status.Stage = "failed"
+			status.Message = "Failed to start async index worker."
+			status.UpdatedAt = now
+			status.CompletedAt = now
+			status.ResultReady = true
+			status.Error = &operation.ErrorDetail{Code: output.ErrorCode(err), Message: err.Error()}
+			_ = operation.SaveStatus(storePath, status)
+			_ = operation.SaveResult(storePath, &operation.Result{
+				OperationID: accepted.OperationID,
+				State:       operation.StateFailed,
+				CompletedAt: now,
+				Truncated:   false,
+				Error:       status.Error,
+			})
+		}
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: accepted,
+		Text: renderOperationAcceptedText(accepted),
+	}, nil
+}
+
+func startIndexWorkerProcess(storePath, operationID string, cmd cli.IndexCommand) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return apperr.IOError("Failed to resolve current executable for async index.")
+	}
+	args := []string{"--store", storePath, "operation", "run-index", operationID}
+	args = append(args, indexArgs(cmd)...)
+	worker := exec.Command(exe, args...)
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return apperr.IOError("Failed to open null device for async index worker.")
+	}
+	worker.Stdin = devNull
+	worker.Stdout = devNull
+	worker.Stderr = devNull
+	if err := worker.Start(); err != nil {
+		_ = devNull.Close()
+		return apperr.IOError("Failed to start async index worker: %s.", err.Error())
+	}
+	_ = devNull.Close()
+	return nil
+}
+
+func indexArgs(cmd cli.IndexCommand) []string {
+	args := []string{
+		"--depth", fmt.Sprintf("%d", cmd.Depth),
+		"--concurrency", fmt.Sprintf("%d", cmd.Concurrency),
+		"--max-file-size", fmt.Sprintf("%d", cmd.MaxFileSize),
+	}
+	for _, pattern := range cmd.Include {
+		args = append(args, "--include", pattern)
+	}
+	for _, pattern := range cmd.Exclude {
+		args = append(args, "--exclude", pattern)
+	}
+	if cmd.Refresh {
+		args = append(args, "--refresh")
+	}
+	if cmd.NoSummary {
+		args = append(args, "--no-summary")
+	}
+	args = append(args, cmd.Path)
+	return args
+}
+
+func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (*output.CommandResult, error) {
+	reporter := operation.NewReporter(storePath, operationID)
+	status, err := operation.LoadStatus(storePath, operationID)
+	if err != nil {
+		return nil, err
+	}
+	if status.State == operation.StateCanceled {
+		return &output.CommandResult{Data: status, Text: renderOperationStatusText(status)}, nil
+	}
+	status.State = operation.StateRunning
+	status.Stage = "indexing"
+	status.Message = "Indexing path."
+	status.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := operation.SaveStatus(storePath, status); err != nil {
+		return nil, err
+	}
+	_ = reporter.Report(operation.Report{
+		Stage:   "indexing",
+		Message: "Indexing path.",
+		Data: map[string]any{
+			"path": cmd.Path,
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go watchOperationCancel(storePath, operationID, cancel, done)
+
+	result, err := index.Build(index.Options{
+		Context:             ctx,
+		Root:                cmd.Path,
+		Depth:               cmd.Depth,
+		Include:             cmd.Include,
+		Exclude:             cmd.Exclude,
+		MaxConcurrency:      cmd.Concurrency,
+		Refresh:             cmd.Refresh,
+		NoSummary:           cmd.NoSummary,
+		MaxFileSize:         cmd.MaxFileSize,
+		Summarizer:          buildLLMSummarizer(storePath),
+		FailureNoticeWriter: io.Discard,
+	})
+	close(done)
+
+	current, loadErr := operation.LoadStatus(storePath, operationID)
+	if loadErr != nil {
+		return nil, loadErr
+	}
+	if current.State == operation.StateCanceled {
+		return &output.CommandResult{Data: current, Text: renderOperationStatusText(current)}, nil
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err != nil {
+		current.State = operation.StateFailed
+		current.Stage = "failed"
+		current.Message = err.Error()
+		current.UpdatedAt = now
+		current.CompletedAt = now
+		current.ResultReady = true
+		current.Error = &operation.ErrorDetail{Code: output.ErrorCode(err), Message: err.Error()}
+		if saveErr := operation.SaveStatus(storePath, current); saveErr != nil {
+			return nil, saveErr
+		}
+		if saveErr := operation.SaveResult(storePath, &operation.Result{
+			OperationID: operationID,
+			State:       operation.StateFailed,
+			CompletedAt: now,
+			Truncated:   false,
+			Error:       current.Error,
+		}); saveErr != nil {
+			return nil, saveErr
+		}
+		_ = reporter.Report(operation.Report{Stage: "failed", Message: err.Error(), Level: "error"})
+		return nil, err
+	}
+
+	current.State = operation.StateSucceeded
+	current.Stage = "complete"
+	current.Message = "Index operation completed."
+	current.UpdatedAt = now
+	current.CompletedAt = now
+	current.ResultReady = true
+	current.Error = nil
+	if err := operation.SaveStatus(storePath, current); err != nil {
+		return nil, err
+	}
+	if err := operation.SaveResult(storePath, &operation.Result{
+		OperationID: operationID,
+		State:       operation.StateSucceeded,
+		CompletedAt: now,
+		Data:        result,
+		Truncated:   false,
+	}); err != nil {
+		return nil, err
+	}
+	_ = reporter.Report(operation.Report{Stage: "complete", Message: "Index operation completed."})
+	return &output.CommandResult{Data: result, Text: renderIndexText(result)}, nil
+}
+
+func watchOperationCancel(storePath, operationID string, cancel context.CancelFunc, done <-chan struct{}) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			status, err := operation.LoadStatus(storePath, operationID)
+			if err == nil && status.State == operation.StateCanceled {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
 func runIndexClean(cmd cli.IndexCleanCommand) (*output.CommandResult, error) {
 	result, err := index.CleanArtifacts(cmd.Path, cmd.DryRun)
 	if err != nil {
@@ -115,6 +335,7 @@ func runIndexClean(cmd cli.IndexCleanCommand) (*output.CommandResult, error) {
 	if result.DryRun {
 		text = fmt.Sprintf("Would remove %d index artifact(s) under %s", result.RemovedCount, result.Root)
 	}
+	text += "\nnext: aascribe index " + result.Root
 
 	return &output.CommandResult{
 		Data: result,
@@ -132,6 +353,7 @@ func runIndexDirty(cmd cli.IndexDirtyCommand) (*output.CommandResult, error) {
 	if result.MarkedCount > 0 {
 		text = fmt.Sprintf("Marked %d index metadata file(s) dirty under %s", result.MarkedCount, result.Root)
 	}
+	text += "\nnext: aascribe index " + result.Root
 	return &output.CommandResult{
 		Data: result,
 		Text: text,
@@ -195,7 +417,10 @@ func runLogsPath(storePath string) *output.CommandResult {
 		Data: map[string]any{
 			"path": logPath,
 		},
-		Text: logPath,
+		Text: strings.Join([]string{
+			logPath,
+			"next: aascribe logs export --output ./aascribe.log",
+		}, "\n"),
 	}
 }
 
@@ -220,7 +445,7 @@ func runLogsExport(storePath, outputPath string) (*output.CommandResult, error) 
 			"source_path": sourcePath,
 			"output_path": outputPath,
 		},
-		Text: fmt.Sprintf("Exported log file to %s", outputPath),
+		Text: fmt.Sprintf("Exported log file to %s\nnext: inspect %s", outputPath, outputPath),
 	}, nil
 }
 
@@ -245,7 +470,7 @@ func runLogsClear(storePath string, force bool) (*output.CommandResult, error) {
 			"path":    logPath,
 			"cleared": true,
 		},
-		Text: fmt.Sprintf("Cleared log file at %s", logPath),
+		Text: fmt.Sprintf("Cleared log file at %s\nnext: aascribe logs path", logPath),
 	}, nil
 }
 
@@ -259,6 +484,7 @@ func runInit(storePath string, force bool) (*output.CommandResult, error) {
 	if outcome.Reinitialized {
 		text = fmt.Sprintf("Reinitialized aascribe store at %s", storePath)
 	}
+	text += "\nnext: aascribe logs path"
 
 	return &output.CommandResult{
 		Data: map[string]any{
@@ -271,11 +497,67 @@ func runInit(storePath string, force bool) (*output.CommandResult, error) {
 	}, nil
 }
 
+func runOperationList(storePath string) (*output.CommandResult, error) {
+	result, err := operation.ListOperations(storePath)
+	if err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: result,
+		Text: renderOperationListText(result),
+	}, nil
+}
+
+func runOperationStatus(storePath, id string) (*output.CommandResult, error) {
+	result, err := operation.LoadStatus(storePath, id)
+	if err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: result,
+		Text: renderOperationStatusText(result),
+	}, nil
+}
+
+func runOperationEvents(storePath, id string) (*output.CommandResult, error) {
+	result, err := operation.LoadEvents(storePath, id)
+	if err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: result,
+		Text: renderOperationEventsText(result),
+	}, nil
+}
+
+func runOperationResult(storePath, id string) (*output.CommandResult, error) {
+	result, err := operation.LoadResult(storePath, id)
+	if err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: result,
+		Text: renderOperationResultText(result),
+	}, nil
+}
+
+func runOperationCancel(storePath, id string) (*output.CommandResult, error) {
+	result, err := operation.Cancel(storePath, id)
+	if err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: result,
+		Text: fmt.Sprintf("%s: %s", result.OperationID, result.Message),
+	}, nil
+}
+
 func renderMapText(result *index.PathIndexMap) string {
 	if result == nil {
 		return ""
 	}
 	var lines []string
+	lines = append(lines, "usage: map is a routing overview; for precise answers inspect the target file directly or re-run index without --no-summary.")
 	if len(result.StateGuide) > 0 {
 		lines = append(lines, "state guide:")
 		keys := make([]string, 0, len(result.StateGuide))
@@ -327,6 +609,103 @@ func renderMapText(result *index.PathIndexMap) string {
 	return strings.Join(lines, "\n")
 }
 
+func renderOperationListText(result *operation.List) string {
+	if result == nil || len(result.Items) == 0 {
+		return "No stored operations.\nnext: aascribe index --async <path>"
+	}
+	lines := []string{fmt.Sprintf("operations: %d", result.Count)}
+	for _, item := range result.Items {
+		lines = append(lines, fmt.Sprintf("- %s  %s  %s  %s", item.OperationID, item.Command, item.State, item.Stage))
+	}
+	lines = append(lines, "next: aascribe operation status <operation-id>")
+	return strings.Join(lines, "\n")
+}
+
+func renderOperationAcceptedText(result *operation.Accepted) string {
+	if result == nil {
+		return ""
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("operation: %s", result.OperationID),
+		fmt.Sprintf("command: %s", result.Command),
+		fmt.Sprintf("state: %s", result.State),
+		"next:",
+		"  " + result.StatusHint,
+		"  " + result.ResultHint,
+		"  " + result.CancelHint,
+	}, "\n")
+}
+
+func renderOperationStatusText(result *operation.Status) string {
+	if result == nil {
+		return ""
+	}
+	lines := []string{
+		fmt.Sprintf("operation: %s", result.OperationID),
+		fmt.Sprintf("command: %s", result.Command),
+		fmt.Sprintf("state: %s", result.State),
+		fmt.Sprintf("stage: %s", result.Stage),
+		fmt.Sprintf("message: %s", result.Message),
+		fmt.Sprintf("result_ready: %t", result.ResultReady),
+	}
+	if result.Progress != nil {
+		lines = append(lines, fmt.Sprintf("progress: %d/%d %s (%.1f%%)", result.Progress.Current, result.Progress.Total, result.Progress.Unit, result.Progress.Percent))
+	}
+	if result.CompletedAt != "" {
+		lines = append(lines, fmt.Sprintf("completed_at: %s", result.CompletedAt))
+	}
+	if result.Error != nil {
+		lines = append(lines, fmt.Sprintf("error: %s - %s", result.Error.Code, result.Error.Message))
+	}
+	switch {
+	case result.ResultReady:
+		lines = append(lines, "next: aascribe operation result "+result.OperationID)
+	case result.State == operation.StateRunning || result.State == operation.StatePending:
+		lines = append(lines, "next: aascribe operation events "+result.OperationID)
+		lines = append(lines, "cancel: aascribe operation cancel "+result.OperationID)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderOperationEventsText(result *operation.EventList) string {
+	if result == nil {
+		return ""
+	}
+	if len(result.Events) == 0 {
+		return fmt.Sprintf("operation: %s\nNo recorded events.\nnext: aascribe operation status %s", result.OperationID, result.OperationID)
+	}
+	lines := []string{fmt.Sprintf("operation: %s", result.OperationID)}
+	for _, event := range result.Events {
+		lines = append(lines, fmt.Sprintf("- %s [%s] %s: %s", event.Time, event.Level, event.Stage, event.Message))
+	}
+	lines = append(lines, "next: aascribe operation status "+result.OperationID)
+	return strings.Join(lines, "\n")
+}
+
+func renderOperationResultText(result *operation.Result) string {
+	if result == nil {
+		return ""
+	}
+	lines := []string{
+		fmt.Sprintf("operation: %s", result.OperationID),
+		fmt.Sprintf("state: %s", result.State),
+		fmt.Sprintf("completed_at: %s", result.CompletedAt),
+		fmt.Sprintf("truncated: %t", result.Truncated),
+	}
+	if result.OutputID != "" {
+		lines = append(lines, fmt.Sprintf("output_id: %s", result.OutputID))
+		lines = append(lines, "next: aascribe output show "+result.OutputID)
+	}
+	if result.Error != nil {
+		lines = append(lines, fmt.Sprintf("error: %s - %s", result.Error.Code, result.Error.Message))
+	}
+	if result.Data != nil {
+		lines = append(lines, "data: available")
+		lines = append(lines, "next: aascribe --format json operation result "+result.OperationID)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func renderEvalText(result *index.EvalResult) string {
 	if result == nil {
 		return ""
@@ -352,6 +731,11 @@ func renderEvalText(result *index.EvalResult) string {
 	lines = append(lines, fmt.Sprintf("unchanged files: %d", len(unchangedFiles)))
 	for _, item := range unchangedFiles {
 		lines = append(lines, "  "+item.Path)
+	}
+	if len(needsFolders) > 0 || len(needsFiles) > 0 {
+		lines = append(lines, "next: aascribe index "+result.Root)
+	} else {
+		lines = append(lines, "next: aascribe map "+result.Root)
 	}
 
 	return strings.Join(lines, "\n")
@@ -451,8 +835,15 @@ func runOutputList(storePath string) (*output.CommandResult, error) {
 		return nil, err
 	}
 	lines := make([]string, 0, len(items))
+	if len(items) == 0 {
+		lines = append(lines, "No stored outputs.")
+		lines = append(lines, "next: run a command that may produce large output, then retry aascribe output list")
+	}
 	for _, item := range items {
 		lines = append(lines, fmt.Sprintf("%s %s %dB", item.ID, item.Command, item.TotalBytes))
+	}
+	if len(items) > 0 {
+		lines = append(lines, "next: aascribe output show <output-id>")
 	}
 	return &output.CommandResult{
 		Data: map[string]any{
@@ -521,7 +912,11 @@ func runOutputMeta(storePath, id string) (*output.CommandResult, error) {
 			"total_bytes": item.TotalBytes,
 			"total_runes": item.TotalRunes,
 		},
-		Text: fmt.Sprintf("%s %s %dB", item.ID, item.Command, item.TotalBytes),
+		Text: strings.Join([]string{
+			fmt.Sprintf("%s %s %dB", item.ID, item.Command, item.TotalBytes),
+			"next: aascribe output show " + item.ID,
+			"slice: aascribe output slice " + item.ID + " --offset 0 --limit 4000",
+		}, "\n"),
 	}, nil
 }
 

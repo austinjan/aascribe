@@ -176,5 +176,5 @@ func min3(a, b, c int) int {
 }
 
 func topLevelCommands() []string {
-	return []string{"init", "logs", "output", "index", "describe", "remember", "consolidate", "recall", "chat", "summarize", "list", "show", "forget"}
+	return []string{"init", "logs", "output", "operation", "index", "describe", "remember", "consolidate", "recall", "chat", "summarize", "list", "show", "forget"}
 }
