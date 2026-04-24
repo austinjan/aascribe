@@ -2,6 +2,7 @@ package index
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -275,7 +276,7 @@ func TestBuildUsesProvidedSummarizer(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			if length != "medium" || focus != "" {
 				t.Fatalf("unexpected summarizer args length=%q focus=%q", length, focus)
 			}
@@ -304,7 +305,7 @@ func TestBuildRecordsFailedFilesAndContinues(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			if strings.Contains(path, "bad.txt") {
 				return "", os.ErrPermission
 			}
@@ -358,7 +359,7 @@ func TestBuildWarnsAfterConsecutiveFailures(t *testing.T) {
 		MaxFileSize:         1024,
 		FailureThreshold:    2,
 		FailureNoticeWriter: &stderr,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			if strings.Contains(path, "bad-") {
 				return "", os.ErrInvalid
 			}
@@ -397,7 +398,7 @@ func TestBuildReusesUnchangedFileMetadata(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			calls++
 			return "first summary", nil
 		},
@@ -414,7 +415,7 @@ func TestBuildReusesUnchangedFileMetadata(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			calls++
 			return "second summary", nil
 		},
@@ -441,7 +442,7 @@ func TestBuildResummarizesModifiedFile(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			return "first summary", nil
 		},
 	})
@@ -455,7 +456,7 @@ func TestBuildResummarizesModifiedFile(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			calls++
 			return "updated summary", nil
 		},
@@ -482,7 +483,7 @@ func TestBuildRetriesPreviouslyFailedFileEvenWhenUnchanged(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			return "", os.ErrPermission
 		},
 	})
@@ -495,7 +496,7 @@ func TestBuildRetriesPreviouslyFailedFileEvenWhenUnchanged(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			calls++
 			return "recovered summary", nil
 		},
@@ -523,7 +524,7 @@ func TestBuildAddsNewFileWithoutResummarizingUnchangedSibling(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			if filepath.Base(path) == "existing.txt" {
 				return "existing summary", nil
 			}
@@ -540,7 +541,7 @@ func TestBuildAddsNewFileWithoutResummarizingUnchangedSibling(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			calls[filepath.Base(path)]++
 			switch filepath.Base(path) {
 			case "new.txt":
@@ -586,7 +587,7 @@ func TestBuildRemovesDeletedFileWhileReusingUnchangedSibling(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			switch filepath.Base(path) {
 			case "keep.txt":
 				return "keep summary", nil
@@ -609,7 +610,7 @@ func TestBuildRemovesDeletedFileWhileReusingUnchangedSibling(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			calls++
 			return "unexpected rerun", nil
 		},
@@ -670,7 +671,7 @@ func TestBuildReindexesUnchangedFileWhenMetadataDirty(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			return "first summary", nil
 		},
 	})
@@ -687,7 +688,7 @@ func TestBuildReindexesUnchangedFileWhenMetadataDirty(t *testing.T) {
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			calls++
 			return "dirty rebuild summary", nil
 		},
@@ -721,7 +722,7 @@ func TestEvalReportsNeedsIndexAndUnchangedEntries(t *testing.T) {
 		Root:        root,
 		Depth:       4,
 		MaxFileSize: 1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			return "summary", nil
 		},
 	}); err != nil {
@@ -770,7 +771,7 @@ func TestBuildRespectsMaxConcurrency(t *testing.T) {
 			Depth:          1,
 			MaxConcurrency: 2,
 			MaxFileSize:    1024,
-			Summarizer: func(path, content, length, focus string) (string, error) {
+			Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 				now := atomic.AddInt32(&current, 1)
 				for {
 					prior := atomic.LoadInt32(&maxSeen)
@@ -811,7 +812,7 @@ func TestBuildConcurrentFileProcessingRemainsDeterministic(t *testing.T) {
 		Depth:          1,
 		MaxConcurrency: 3,
 		MaxFileSize:    1024,
-		Summarizer: func(path, content, length, focus string) (string, error) {
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
 			switch filepath.Base(path) {
 			case "c.txt":
 				time.Sleep(40 * time.Millisecond)
@@ -835,6 +836,131 @@ func TestBuildConcurrentFileProcessingRemainsDeterministic(t *testing.T) {
 	want := []string{"a.txt", "b.txt", "c.txt"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expected deterministic metadata order %v, got %v", want, got)
+	}
+}
+
+func TestBuildRespectsFolderConcurrency(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 4; i++ {
+		mustWriteFile(t, filepath.Join(root, "dir-"+itoa(i), "file.txt"), "hello\n")
+	}
+
+	release := make(chan struct{})
+	var current int32
+	var maxSeen int32
+	done := make(chan struct{})
+	var buildErr error
+
+	go func() {
+		defer close(done)
+		_, buildErr = Build(Options{
+			Root:           root,
+			Depth:          4,
+			MaxConcurrency: 2,
+			MaxFileSize:    1024,
+			Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
+				now := atomic.AddInt32(&current, 1)
+				for {
+					prior := atomic.LoadInt32(&maxSeen)
+					if now <= prior || atomic.CompareAndSwapInt32(&maxSeen, prior, now) {
+						break
+					}
+				}
+				<-release
+				atomic.AddInt32(&current, -1)
+				return "summary", nil
+			},
+		})
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for atomic.LoadInt32(&maxSeen) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(release)
+	<-done
+
+	if buildErr != nil {
+		t.Fatalf("expected build success, got %v", buildErr)
+	}
+	if atomic.LoadInt32(&maxSeen) != 2 {
+		t.Fatalf("expected folder-local rebuild concurrency 2, got %d", atomic.LoadInt32(&maxSeen))
+	}
+}
+
+func TestBuildWithCanceledContextStopsIndexing(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 3; i++ {
+		mustWriteFile(t, filepath.Join(root, "file-"+itoa(i)+".txt"), "hello\n")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{}, 1)
+	done := make(chan struct{})
+	var buildErr error
+	go func() {
+		defer close(done)
+		_, buildErr = Build(Options{
+			Context:        ctx,
+			Root:           root,
+			Depth:          1,
+			MaxConcurrency: 2,
+			MaxFileSize:    1024,
+			Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				<-ctx.Done()
+				return "", ctx.Err()
+			},
+		})
+	}()
+
+	<-started
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected build to stop after context cancellation")
+	}
+
+	if buildErr == nil || !strings.Contains(buildErr.Error(), "canceled") {
+		t.Fatalf("expected cancellation error, got %v", buildErr)
+	}
+}
+
+func TestBuildDeepTreeDoesNotDeadlockAtLowConcurrency(t *testing.T) {
+	root := t.TempDir()
+	current := root
+	for i := 0; i < 5; i++ {
+		current = filepath.Join(current, "level-"+itoa(i))
+		mustWriteFile(t, filepath.Join(current, "file.txt"), "hello\n")
+	}
+
+	done := make(chan struct{})
+	var buildErr error
+	go func() {
+		defer close(done)
+		_, buildErr = Build(Options{
+			Root:           root,
+			Depth:          8,
+			MaxConcurrency: 1,
+			MaxFileSize:    1024,
+			Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
+				return "summary", nil
+			},
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected deep tree build to complete without deadlock")
+	}
+	if buildErr != nil {
+		t.Fatalf("expected build success, got %v", buildErr)
 	}
 }
 

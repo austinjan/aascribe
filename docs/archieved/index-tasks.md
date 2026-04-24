@@ -1,5 +1,25 @@
 # Index Implementation Tasks
 
+Status: Completed and archived
+
+This document is archived because the first `index` milestone is complete enough to move out of the active task list.
+
+What shipped in this milestone:
+
+- local-only per-folder `.aascribe_index_meta.json`
+- top-level `map` command plus `index map` alias
+- `index dirty`
+- `index eval`
+- unchanged-file metadata reuse
+- failure-tolerant indexing
+- bounded concurrency for file work and folder local rebuild orchestration
+- context-aware cancellation plumbing inside the index engine
+
+Follow-up work that grows beyond this milestone now belongs in separate docs, especially:
+
+- [../tasks/operation-tasks.md](../tasks/operation-tasks.md) for long-running command lifecycle
+- future shape/service work if `describe` and `index` are further unified
+
 Task breakdown for implementing `aascribe index` in the current Go codebase.
 
 This document is execution-oriented. It turns the design ideas in [../reference/INDEX_FUNCTION_MIGRATION_PLAN.md](../reference/INDEX_FUNCTION_MIGRATION_PLAN.md) into concrete work items for `aascribe`, using the current project constraints:
@@ -30,7 +50,9 @@ Done in the current repo:
 - `map` now exposes simple node states: `ready`, `dirty`, and `unindexed`
 - the CLI default format is now compact `text`; `json` is explicitly requested when machine parsing is needed
 - `index` now reuses unchanged direct-file metadata across runs
-- `index` now supports bounded direct-file concurrency and a `--concurrency` CLI flag
+- `index` now supports fixed-worker direct-file concurrency and a `--concurrency` CLI flag
+- `index` now propagates context into summarizer work so cancellation/timeouts can stop in-flight indexing
+- `index` now runs direct child folders through a fixed subtree-worker pool while bounding local folder rebuild work with a shared folder semaphore
 - `index dirty` is implemented and marks existing per-folder metadata stale recursively
 - `index eval` is implemented and reports which folders and direct files need indexing versus which are unchanged
 - fixture-based tests exist under `tests/index-fixtures` and cover ignore behavior, text detection, binary detection, and multi-level traversal
@@ -40,7 +62,7 @@ Still intentionally incomplete:
 - `index` still owns its own summary assembly instead of reusing one shared `describe` service end-to-end
 - folder summaries are still deterministic placeholders, not real bottom-up LLM summaries
 - `index` runs synchronously and does not yet provide agent-friendly handling for long-running indexing work
-- recursive folder traversal is still serial; folder-level orchestration concurrency and shared folder semaphore control are not implemented yet
+- subtree concurrency is now bounded, but descendants inside one subtree worker still recurse inline rather than through another shared fixed folder worker pool
 
 ## Scope And Sequencing
 
@@ -306,7 +328,7 @@ Current gap:
 
 ### Task 3.2: Process changed files only
 
-Status: not started.
+Status: partial.
 
 Changed set includes:
 
@@ -320,6 +342,16 @@ Unchanged files should reuse prior metadata summaries.
 Implementation note:
 
 - changed-file processing should use bounded concurrency rather than serial processing or unbounded goroutines
+
+Current behavior:
+
+- unchanged direct files already reuse prior metadata
+- changed direct files already process through a fixed worker pool sized by `--concurrency`
+- summarizer calls now receive `context.Context`, so cancellation/timeout can stop further work when the underlying summarizer honors context
+
+Follow-up requirement:
+
+- add the same fixed-pool discipline to folder orchestration so child directory goroutine growth is also bounded
 
 ### Task 3.3: Preserve partial success
 
@@ -550,6 +582,18 @@ Concrete cases:
 - run a deep tree with low concurrency and assert the traversal completes without ancestor-held semaphore deadlock
 - inject one slow child folder and assert parent metadata is written only after that child finishes or records structured failure state
 
+Current coverage:
+
+- direct-file max in-flight concurrency is covered
+- deterministic metadata ordering under direct-file concurrency is covered
+- context cancellation stops indexing and returns early
+- deep recursion with low concurrency completes without ancestor-held semaphore deadlock
+- shared folder semaphore behavior is covered through concurrent sibling-folder rebuild tests
+
+Still missing:
+
+- stronger instrumentation proving global subtree-worker goroutine count stays bounded in very wide directory trees
+
 ### Task T2c: Ignore inheritance tests
 
 - nested `.gitignore` applies inside the nested folder
@@ -607,9 +651,15 @@ The first acceptable `index` implementation should:
 - reuse unchanged file summaries across runs
 - retry previously failed files
 - recurse bottom-up
-- support bounded concurrency without unbounded goroutine growth
+- support bounded concurrency for direct-file work
 - survive per-file failures without dropping the whole folder
 - integrate with the Go CLI envelope/output system cleanly
+
+Follow-up acceptance criteria for the concurrency phase should additionally require:
+
+- fixed worker-pool based direct-file execution without unbounded goroutine growth
+- folder-level shared semaphore control
+- no ancestor-held semaphore deadlock during deep recursion
 
 The first acceptable hierarchy-map implementation should:
 

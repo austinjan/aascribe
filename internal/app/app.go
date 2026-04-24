@@ -22,7 +22,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	parsed, err := cli.Parse(args)
 	if err != nil {
-		format := cli.FormatJSON
+		format := cli.FormatText
 		storePath := "<unresolved>"
 		commandName := "<parse>"
 		verbose := false

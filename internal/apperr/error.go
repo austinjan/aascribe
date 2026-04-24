@@ -59,6 +59,10 @@ func LogFileNotFound(path string) *Error {
 	return newError("LOG_FILE_NOT_FOUND", ExitNotFound, "No log file at %s.", path)
 }
 
+func PathNotFound(path string) *Error {
+	return newError("PATH_NOT_FOUND", ExitNotFound, "No file or directory at %s.", path)
+}
+
 func NotFoundOutput(id string) *Error {
 	return newError("OUTPUT_NOT_FOUND", ExitNotFound, "No stored output with id %s.", id)
 }

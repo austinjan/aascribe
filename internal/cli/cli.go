@@ -580,7 +580,7 @@ Examples:
 
 Further Info:
   aascribe --help
-  Read docs/USAGE.md and docs/tasks/index-tasks.md for design context
+  Read docs/USAGE.md and docs/spec/index-spec.md for the stable index contract
 `)
 	case "index clean":
 		return strings.TrimSpace(`

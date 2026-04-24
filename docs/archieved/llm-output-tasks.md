@@ -1,6 +1,17 @@
 # LLM Output Tasks
 
-Status: Planned
+Status: Completed
+
+Completed outcomes:
+
+- added reusable `pkg/llmoutput` transport logic for large command output
+- spill oversized output to managed files under `<store>/outputs/`
+- added `aascribe output generate` for transport testing without relying on the LLM
+- added `aascribe output list`, `meta`, `show`, `head`, `tail`, and `slice`
+- added partial-output metadata with `output_id`, truncation state, range data, and next-step hints
+- implemented automatic retention of the newest 50 stored outputs
+- integrated transport handling into large text success responses
+- added automated tests for transport, browsing, and retention behavior
 
 ## Summary
 
@@ -39,7 +50,7 @@ This document acts as the execution tracker for the LLM-oriented output system.
 - define the partial-output metadata contract
 - define the browsing command surface for stored output
 
-Status: Planned
+Status: Completed
 
 #### Task 0.2: Define the stored-output navigation interface
 
@@ -56,7 +67,7 @@ Status: Planned
   - or lines
 - document deterministic behavior for out-of-range requests
 
-Status: Planned
+Status: Completed
 
 #### Task 0.3: Define the retention contract
 
@@ -64,7 +75,7 @@ Status: Planned
 - define eviction behavior
 - define required manifest metadata
 
-Status: Planned
+Status: Completed
 
 ### Phase 1: Core Transport Package
 
@@ -74,7 +85,7 @@ Status: Planned
 - keep it independent from `aascribe` business logic
 - define core transport-facing types
 
-Status: Planned
+Status: Completed
 
 #### Task 1.2: Add inline-vs-stored delivery logic
 
@@ -84,7 +95,7 @@ Status: Planned
   - full inline output
   - or partial inline output plus stored-output metadata
 
-Status: Planned
+Status: Completed
 
 #### Task 1.3: Add managed output persistence
 
@@ -92,7 +103,7 @@ Status: Planned
 - assign stable output IDs
 - write metadata needed for later browsing
 
-Status: Planned
+Status: Completed
 
 ### Phase 2: Stored Output Browsing
 
@@ -101,21 +112,21 @@ Status: Planned
 - return metadata for one stored output
 - include total size, created time, and navigation hints
 
-Status: Planned
+Status: Completed
 
 #### Task 2.2: Add `output show`
 
 - return metadata plus the default first chunk
 - make the result useful as the first recovery step after truncation
 
-Status: Planned
+Status: Completed
 
 #### Task 2.3: Add `output head` and `output tail`
 
 - support bounded line-based browsing
 - return clear range metadata with every response
 
-Status: Planned
+Status: Completed
 
 #### Task 2.4: Add `output slice`
 
@@ -123,14 +134,14 @@ Status: Planned
 - define offset unit explicitly
 - reject or clamp invalid ranges consistently
 
-Status: Planned
+Status: Completed
 
 #### Task 2.5: Add `output list`
 
 - list recent retained outputs
 - include IDs and enough metadata for follow-up reads
 
-Status: Planned
+Status: Completed
 
 ### Phase 3: Partial Output Hints
 
@@ -142,7 +153,7 @@ Status: Planned
 - include total size
 - include next-step command hints
 
-Status: Planned
+Status: Completed
 
 #### Task 3.2: Make partial-output hints explicit for LLMs
 
@@ -150,7 +161,7 @@ Status: Planned
 - clearly indicate where the full output lives
 - clearly indicate how to query the next portion
 
-Status: Planned
+Status: Completed
 
 ### Phase 4: Retention And Storage Safety
 
@@ -160,7 +171,7 @@ Status: Planned
 - evict the oldest retained output after overflow
 - keep manifest state in sync with file deletion
 
-Status: Planned
+Status: Completed
 
 #### Task 4.2: Handle corrupted or missing stored outputs
 
@@ -168,7 +179,7 @@ Status: Planned
 - return clear errors for missing files
 - handle corrupted manifest state safely
 
-Status: Planned
+Status: Completed
 
 ### Phase 5: Command Integration
 
@@ -177,7 +188,7 @@ Status: Planned
 - integrate the transport layer into the current output path
 - keep command handlers focused on raw output production
 
-Status: Planned
+Status: Completed
 
 #### Task 5.2: Choose the first commands to adopt the transport path
 
@@ -188,7 +199,7 @@ Recommended first candidates:
 - `index`
 - any command likely to emit large result sets
 
-Status: Planned
+Status: Completed
 
 ### Phase 6: Verification
 
@@ -198,7 +209,7 @@ Status: Planned
 - large output spills to file
 - partial hint fields are present
 
-Status: Planned
+Status: Completed
 
 #### Task 6.2: Browsing command tests
 
@@ -208,14 +219,14 @@ Status: Planned
 - `output tail` works
 - `output slice` works
 
-Status: Planned
+Status: Completed
 
 #### Task 6.3: Retention tests
 
 - oldest outputs are evicted after the 50-item limit
 - manifest and files stay consistent across repeated writes
 
-Status: Planned
+Status: Completed
 
 ## Why This Matters
 

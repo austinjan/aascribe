@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -653,7 +654,12 @@ func buildLLMSummarizer(storePath string) index.SummarizerFunc {
 	if err != nil {
 		return nil
 	}
-	return func(path, content, length, focus string) (string, error) {
+	return func(ctx context.Context, path, content, length, focus string) (string, error) {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+		}
 		response, err := promptRunner(resolved, buildDescribePrompt(path, content, length, focus))
 		if err != nil {
 			return "", err

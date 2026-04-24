@@ -1,6 +1,7 @@
 package index
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -24,6 +25,7 @@ var defaultExcludes = []string{".git", "node_modules", "target", "dist", ".venv"
 const metadataFilename = ".aascribe_index_meta.json"
 
 type Options struct {
+	Context             context.Context
 	Root                string
 	Depth               int
 	Include             []string
@@ -37,7 +39,7 @@ type Options struct {
 	FailureNoticeWriter io.Writer
 }
 
-type SummarizerFunc func(path, content, length, focus string) (string, error)
+type SummarizerFunc func(ctx context.Context, path, content, length, focus string) (string, error)
 
 type PathIndexTree struct {
 	Root string          `json:"root"`
@@ -180,13 +182,21 @@ type failureTracker struct {
 }
 
 type buildRuntime struct {
-	fileLimiter chan struct{}
+	ctx           context.Context
+	fileWorkers   int
+	folderLimiter chan struct{}
 }
 
 type fileBuildResult struct {
 	node     IndexedPathNode
 	metadata Metadata
 	err      error
+}
+
+type childDirResult struct {
+	path string
+	node IndexedPathNode
+	err  error
 }
 
 func Build(opts Options) (*PathIndexTree, error) {
@@ -216,12 +226,15 @@ func Build(opts Options) (*PathIndexTree, error) {
 	timestamp := time.Now().UTC().Format(time.RFC3339)
 	tracker := newFailureTracker(opts.FailureThreshold, opts.FailureNoticeWriter)
 	rt := newBuildRuntime(opts.MaxConcurrency)
+	if opts.Context != nil {
+		rt.ctx = opts.Context
+	}
 	rootName := filepath.Base(root)
 	if rootName == "." || rootName == string(filepath.Separator) || rootName == "" {
 		rootName = filepath.Clean(root)
 	}
 
-	tree, err := buildDir(root, rootName, 0, opts, matcher, timestamp, tracker, rt)
+	tree, err := buildDir(root, rootName, 0, opts, matcher, timestamp, tracker, rt, true)
 	if err != nil {
 		return nil, err
 	}
@@ -452,7 +465,7 @@ func DescribeFileWithSummarizer(path, length, focus string, summarizer Summarize
 	}
 
 	timestamp := time.Now().UTC().Format(time.RFC3339)
-	analysis, err := analyzeFile(absPath, filepath.ToSlash(path), -1, timestamp, summarizer, length, focus)
+	analysis, err := analyzeFile(context.Background(), absPath, filepath.ToSlash(path), -1, timestamp, summarizer, length, focus)
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +534,10 @@ func loadIgnoreFilePatterns(root, fileName string) ([]string, error) {
 	return patterns, nil
 }
 
-func buildDir(absPath, displayPath string, depth int, opts Options, matcher matcher, timestamp string, tracker *failureTracker, rt *buildRuntime) (IndexedPathNode, error) {
+func buildDir(absPath, displayPath string, depth int, opts Options, matcher matcher, timestamp string, tracker *failureTracker, rt *buildRuntime, allowParallelChildren bool) (IndexedPathNode, error) {
+	if err := runtimeContextErr(rt); err != nil {
+		return IndexedPathNode{}, err
+	}
 	entries, err := os.ReadDir(absPath)
 	if err != nil {
 		return IndexedPathNode{}, apperr.IOError("Failed to read directory: %s.", absPath)
@@ -539,45 +555,63 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 		Dirty:       false,
 	}
 	priorMetadata, _ := readMetadata(absPath)
-	children := make([]IndexedPathNode, 0, len(entries))
+	dirEntries := make([]os.DirEntry, 0, len(entries))
 	fileEntries := make([]os.DirEntry, 0, len(entries))
 	for _, entry := range entries {
+		if err := runtimeContextErr(rt); err != nil {
+			return IndexedPathNode{}, err
+		}
 		name := entry.Name()
 		childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
 		if localMatcher.skip(name, childDisplay, entry.IsDir()) {
 			continue
 		}
 
-		childAbs := filepath.Join(absPath, name)
 		if entry.IsDir() {
 			if opts.Depth >= 0 && depth >= opts.Depth {
 				continue
 			}
-			childNode, err := buildDir(childAbs, childDisplay, depth+1, opts, localMatcher, timestamp, tracker, rt)
-			if err != nil {
-				recordFailure(metadata, childDisplay, err.Error())
-				recordMetadataFailure(metadata, childDisplay, err.Error())
-				tracker.noteFailure(metadata)
-				continue
-			}
-			children = append(children, childNode)
-			tracker.noteSuccess()
+			dirEntries = append(dirEntries, entry)
 			continue
 		}
 		fileEntries = append(fileEntries, entry)
 	}
 
-	fileResults := processFilesConcurrently(absPath, displayPath, fileEntries, opts, timestamp, priorMetadata, rt)
-	for _, result := range fileResults {
+	children := make([]IndexedPathNode, 0, len(entries))
+	childResults, err := processChildDirs(absPath, displayPath, depth, dirEntries, opts, localMatcher, timestamp, tracker, rt, allowParallelChildren)
+	if err != nil {
+		return IndexedPathNode{}, err
+	}
+	for _, result := range childResults {
 		if result.err != nil {
-			recordFailure(metadata, result.node.Path, result.err.Error())
-			recordMetadataFailure(metadata, result.node.Path, result.err.Error())
+			recordFailure(metadata, result.path, result.err.Error())
+			recordMetadataFailure(metadata, result.path, result.err.Error())
 			tracker.noteFailure(metadata)
 			continue
 		}
 		children = append(children, result.node)
-		mergeMetadata(metadata, &result.metadata)
 		tracker.noteSuccess()
+	}
+
+	if err := runWithFolderLimiter(rt, func() error {
+		fileResults, err := processFilesConcurrently(absPath, displayPath, fileEntries, opts, timestamp, priorMetadata, rt)
+		if err != nil {
+			return err
+		}
+		for _, result := range fileResults {
+			if result.err != nil {
+				recordFailure(metadata, result.node.Path, result.err.Error())
+				recordMetadataFailure(metadata, result.node.Path, result.err.Error())
+				tracker.noteFailure(metadata)
+				continue
+			}
+			children = append(children, result.node)
+			mergeMetadata(metadata, &result.metadata)
+			tracker.noteSuccess()
+		}
+		return nil
+	}); err != nil {
+		return IndexedPathNode{}, err
 	}
 
 	sort.Slice(children, func(i, j int) bool {
@@ -613,7 +647,11 @@ func buildFile(absPath, displayPath string, opts Options, timestamp string, meta
 		return reused, nil
 	}
 
-	analysis, err := analyzeFile(absPath, displayPath, opts.MaxFileSize, timestamp, opts.Summarizer, "medium", "")
+	ctx := context.Background()
+	if opts.Context != nil {
+		ctx = opts.Context
+	}
+	analysis, err := analyzeFile(ctx, absPath, displayPath, opts.MaxFileSize, timestamp, opts.Summarizer, "medium", "")
 	if err != nil {
 		return IndexedPathNode{}, err
 	}
@@ -641,43 +679,85 @@ func buildFile(absPath, displayPath string, opts Options, timestamp string, meta
 	return node, nil
 }
 
-func processFilesConcurrently(absPath, displayPath string, entries []os.DirEntry, opts Options, timestamp string, priorMetadata *Metadata, rt *buildRuntime) []fileBuildResult {
+func processFilesConcurrently(absPath, displayPath string, entries []os.DirEntry, opts Options, timestamp string, priorMetadata *Metadata, rt *buildRuntime) ([]fileBuildResult, error) {
 	if len(entries) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	results := make([]fileBuildResult, len(entries))
+	type fileJob struct {
+		index int
+		entry os.DirEntry
+	}
+	jobs := make(chan fileJob)
+	errCh := make(chan error, 1)
 	var wg sync.WaitGroup
-	for i, entry := range entries {
+	workerCount := rt.fileWorkers
+	if workerCount > len(entries) {
+		workerCount = len(entries)
+	}
+	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go func(idx int, entry os.DirEntry) {
+		go func() {
 			defer wg.Done()
-			name := entry.Name()
-			childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
-			childAbs := filepath.Join(absPath, name)
-			runWithFileLimiter(rt, func() {
+			for job := range jobs {
+				if err := runtimeContextErr(rt); err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				name := job.entry.Name()
+				childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
+				childAbs := filepath.Join(absPath, name)
 				localMeta := &Metadata{}
 				node, err := buildFile(childAbs, childDisplay, opts, timestamp, localMeta, priorMetadata)
-				results[idx] = fileBuildResult{
+				results[job.index] = fileBuildResult{
 					node:     node,
 					metadata: *localMeta,
 					err:      err,
 				}
 				if err != nil {
-					results[idx].node = IndexedPathNode{
+					results[job.index].node = IndexedPathNode{
 						Path: filepath.ToSlash(childDisplay),
 						Type: "file",
 					}
 				}
-			})
-		}(i, entry)
+			}
+		}()
 	}
+
+sendLoop:
+	for i, entry := range entries {
+		if err := runtimeContextErr(rt); err != nil {
+			close(jobs)
+			wg.Wait()
+			return nil, err
+		}
+		select {
+		case jobs <- fileJob{index: i, entry: entry}:
+		case err := <-errCh:
+			close(jobs)
+			wg.Wait()
+			return nil, err
+		}
+		if len(errCh) > 0 {
+			break sendLoop
+		}
+	}
+	close(jobs)
 	wg.Wait()
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
+	}
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].node.Path < results[j].node.Path
 	})
-	return results
+	return results, nil
 }
 
 func summarizeDir(children []IndexedPathNode) string {
@@ -733,7 +813,13 @@ func summarizeFile(displayPath string, content []byte, maxFileSize int64) string
 	}
 }
 
-func analyzeFile(absPath, displayPath string, maxFileSize int64, timestamp string, summarizer SummarizerFunc, length, focus string) (*fileAnalysis, error) {
+func analyzeFile(ctx context.Context, absPath, displayPath string, maxFileSize int64, timestamp string, summarizer SummarizerFunc, length, focus string) (*fileAnalysis, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, apperr.IOError("Index canceled: %v.", err)
+	}
 	info, err := os.Stat(absPath)
 	if err != nil {
 		return nil, apperr.IOError("Failed to inspect file: %s.", absPath)
@@ -756,7 +842,10 @@ func analyzeFile(absPath, displayPath string, maxFileSize int64, timestamp strin
 		return result, nil
 	}
 	if summarizer != nil {
-		summary, err := summarizer(filepath.ToSlash(displayPath), string(content), length, focus)
+		if err := ctx.Err(); err != nil {
+			return nil, apperr.IOError("Index canceled: %v.", err)
+		}
+		summary, err := summarizer(ctx, filepath.ToSlash(displayPath), string(content), length, focus)
 		if err != nil {
 			return nil, err
 		}
@@ -1128,7 +1217,11 @@ func reuseFileFromMetadata(absPath, displayPath string, opts Options, metadata *
 	}
 	currentModTime := info.ModTime().UTC().Format(time.RFC3339)
 	if info.Size() != prior.Size || currentModTime != prior.ModTime {
-		analysis, err := analyzeFile(absPath, displayPath, opts.MaxFileSize, time.Now().UTC().Format(time.RFC3339), nil, "medium", "")
+		ctx := context.Background()
+		if opts.Context != nil {
+			ctx = opts.Context
+		}
+		analysis, err := analyzeFile(ctx, absPath, displayPath, opts.MaxFileSize, time.Now().UTC().Format(time.RFC3339), nil, "medium", "")
 		if err != nil {
 			return IndexedPathNode{}, false, err
 		}
@@ -1275,18 +1368,26 @@ func newBuildRuntime(maxConcurrency int) *buildRuntime {
 		maxConcurrency = 1
 	}
 	return &buildRuntime{
-		fileLimiter: make(chan struct{}, maxConcurrency),
+		ctx:           context.Background(),
+		fileWorkers:   maxConcurrency,
+		folderLimiter: make(chan struct{}, maxConcurrency),
 	}
 }
 
-func runWithFileLimiter(rt *buildRuntime, fn func()) {
-	if rt == nil || rt.fileLimiter == nil {
-		fn()
-		return
+func runWithFolderLimiter(rt *buildRuntime, fn func() error) error {
+	if rt == nil || rt.folderLimiter == nil {
+		return fn()
 	}
-	rt.fileLimiter <- struct{}{}
-	defer func() { <-rt.fileLimiter }()
-	fn()
+	if err := runtimeContextErr(rt); err != nil {
+		return err
+	}
+	select {
+	case rt.folderLimiter <- struct{}{}:
+	case <-rt.ctx.Done():
+		return apperr.IOError("Index canceled: %v.", rt.ctx.Err())
+	}
+	defer func() { <-rt.folderLimiter }()
+	return fn()
 }
 
 func mergeMetadata(target, source *Metadata) {
@@ -1297,6 +1398,108 @@ func mergeMetadata(target, source *Metadata) {
 	target.NotIndexedFiles = append(target.NotIndexedFiles, source.NotIndexedFiles...)
 	target.FailedFiles = append(target.FailedFiles, source.FailedFiles...)
 	target.Warnings = append(target.Warnings, source.Warnings...)
+}
+
+func runtimeContextErr(rt *buildRuntime) error {
+	if rt == nil || rt.ctx == nil {
+		return nil
+	}
+	if err := rt.ctx.Err(); err != nil {
+		return apperr.IOError("Index canceled: %v.", err)
+	}
+	return nil
+}
+
+func processChildDirs(absPath, displayPath string, depth int, entries []os.DirEntry, opts Options, matcher matcher, timestamp string, tracker *failureTracker, rt *buildRuntime, allowParallelChildren bool) ([]childDirResult, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	results := make([]childDirResult, len(entries))
+	if !allowParallelChildren {
+		for i, entry := range entries {
+			if err := runtimeContextErr(rt); err != nil {
+				return nil, err
+			}
+			name := entry.Name()
+			childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
+			childAbs := filepath.Join(absPath, name)
+			node, err := buildDir(childAbs, childDisplay, depth+1, opts, matcher, timestamp, tracker, rt, false)
+			results[i] = childDirResult{
+				path: childDisplay,
+				node: node,
+				err:  err,
+			}
+		}
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].path < results[j].path
+		})
+		return results, nil
+	}
+
+	type dirJob struct {
+		index int
+		entry os.DirEntry
+	}
+	jobs := make(chan dirJob)
+	errCh := make(chan error, 1)
+	var wg sync.WaitGroup
+	workerCount := rt.fileWorkers
+	if workerCount > len(entries) {
+		workerCount = len(entries)
+	}
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				if err := runtimeContextErr(rt); err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				name := job.entry.Name()
+				childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
+				childAbs := filepath.Join(absPath, name)
+				node, err := buildDir(childAbs, childDisplay, depth+1, opts, matcher, timestamp, tracker, rt, false)
+				results[job.index] = childDirResult{
+					path: childDisplay,
+					node: node,
+					err:  err,
+				}
+			}
+		}()
+	}
+	for i, entry := range entries {
+		if err := runtimeContextErr(rt); err != nil {
+			close(jobs)
+			wg.Wait()
+			return nil, err
+		}
+		select {
+		case jobs <- dirJob{index: i, entry: entry}:
+		case err := <-errCh:
+			close(jobs)
+			wg.Wait()
+			return nil, err
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
+	}
+	if err := runtimeContextErr(rt); err != nil {
+		return nil, err
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].path < results[j].path
+	})
+	return results, nil
 }
 
 func evalDir(absPath, displayPath string, matcher matcher, result *EvalResult) error {
@@ -1407,7 +1610,7 @@ func evalFile(absPath, displayPath string, meta *Metadata) (string, string, erro
 	}
 	currentModTime := info.ModTime().UTC().Format(time.RFC3339)
 	if info.Size() != prior.Size || currentModTime != prior.ModTime {
-		analysis, err := analyzeFile(absPath, displayPath, -1, time.Now().UTC().Format(time.RFC3339), nil, "medium", "")
+		analysis, err := analyzeFile(context.Background(), absPath, displayPath, -1, time.Now().UTC().Format(time.RFC3339), nil, "medium", "")
 		if err != nil {
 			return "", "", err
 		}
