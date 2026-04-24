@@ -15,6 +15,7 @@ Complete command and flag reference for `aascribe`.
   - [init](#init)
   - [logs](#logs)
   - [index](#index)
+  - [map](#map)
   - [describe](#describe)
   - [remember](#remember)
   - [consolidate](#consolidate)
@@ -33,7 +34,7 @@ Available on every subcommand:
 | Flag | Default | Description |
 |---|---|---|
 | `--store <path>` | `~/.aascribe` or `$AASCRIBE_STORE` | Path to the memory store root |
-| `--format json\|text` | `json` | Output format. `json` is agent-friendly; `text` is human-readable |
+| `--format json\|text` | `text` | Output format. `text` is the compact default for LLM reading; `json` is for machine parsing |
 | `--quiet`, `-q` | off | Suppress all logging; only emit the result |
 | `--verbose`, `-v` | off | Emit debug logs to stderr |
 | `--help`, `-h` | — | Show help for the command |
@@ -54,7 +55,7 @@ Relative values are interpreted as "time ago" for `--since`/`--until` and as "fr
 
 ## Output envelope
 
-Every JSON response uses this shape:
+When you explicitly request `--format json`, every JSON response uses this shape:
 
 ```json
 {
@@ -234,10 +235,12 @@ Example `logs clear` output:
 
 ### `index`
 
-Walk a directory and return a tree of paths with per-file summaries.
+Walk a directory, summarize direct files per folder, and persist local metadata.
 
 ```
 aascribe index <path> [flags]
+aascribe index dirty <path>
+aascribe index eval <path>
 ```
 
 | Flag | Default | Description |
@@ -246,16 +249,32 @@ aascribe index <path> [flags]
 | `--depth <N>` | `3` | Recursion depth. `0` = current level only. `-1` = unlimited |
 | `--include <glob>` | — | Include only matching files. Repeatable |
 | `--exclude <glob>` | `.git`, `node_modules`, `target`, `dist`, `.venv` | Exclude matching files/dirs. Repeatable |
+| `--concurrency <N>` | `4` | Max concurrent direct-file processing jobs across the index run |
 | `--refresh` | off | Ignore cache; regenerate summaries |
 | `--no-summary` | off | Return structure only. Much faster |
 | `--max-file-size <bytes>` | `1048576` | Files over this size get metadata only, no summary |
 
+Behavior notes:
+
+- `index` treats `.gitignore` and `.aaignore` as folder-scoped blacklist exclude files during traversal.
+- Text-file detection is content-based, not extension-based.
+- `index` writes `.aascribe_index_meta.json` files in indexed directories.
+- Each `.aascribe_index_meta.json` is local-only: it describes the current folder and its direct files, not a full descendant tree.
+- Metadata records persisted file descriptions, non-indexed files, failures, and warnings.
+- `index` uses bounded direct-file concurrency. Increase `--concurrency` to speed up summarize/hash work; keep it low if the LLM backend or machine is the bottleneck.
+- Re-running `index` reuses unchanged direct-file metadata when possible.
+- `index dirty <path>` marks existing metadata stale so the next `index` run rebuilds it.
+- `index eval <path>` previews which folders and direct files need indexing, plus which ones are unchanged.
+
 **Example**
 
 ```bash
-aascribe index ./src --depth 2 --include '*.rs' --include '*.toml'
-aascribe index . --no-summary           # structure-only, fast
-aascribe index . --refresh              # force re-summarize
+aascribe index --depth 2 --include '*.rs' --include '*.toml' ./src
+aascribe index --concurrency 8 ./src
+aascribe index --no-summary .           # structure-only, fast
+aascribe index --refresh .              # force re-summarize
+aascribe index dirty ./src              # mark existing metadata stale
+aascribe index eval ./src               # preview changed vs unchanged work
 ```
 
 **OutputShape:** `PathIndexTree`
@@ -287,6 +306,171 @@ aascribe index . --refresh              # force re-summarize
 
 ---
 
+### `map`
+
+Assemble a hierarchy view by reading local `.aascribe_index_meta.json` files recursively.
+
+```
+aascribe map <path>
+```
+
+Behavior notes:
+
+- `map` reads metadata files; it does not re-summarize source files.
+- `map` applies `.gitignore` and `.aaignore` while traversing child directories.
+- `text` is the default output and returns a compact tree intended to be easier for LLMs to read.
+- `--format json` returns a machine-friendly assembled projection.
+- `index map <path>` is supported as an alias, but `map <path>` is the preferred surface.
+- map node states are simple on purpose:
+  - `ready`: local metadata exists
+  - `dirty`: local metadata exists but was explicitly marked stale
+  - `unindexed`: no local metadata file exists yet
+
+**Example**
+
+```bash
+aascribe map ./tests
+aascribe --format text map ./tests
+aascribe --format json map ./docs
+```
+
+**OutputShape:** `PathIndexMap`
+
+**JSON Output**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "root": "/abs/path/to/tests",
+    "state_guide": {
+      "dirty": "Metadata exists but is marked stale. Re-run index before trusting it.",
+      "ready": "Metadata exists for this directory. Use the summary and files shown here first.",
+      "unindexed": "No metadata file exists for this directory yet. If needed, inspect the directory directly or run index on it."
+    },
+    "map": {
+      "path": "/abs/path/to/tests",
+      "state": "ready",
+      "folder_description": "Contains 1 subdirectory.",
+      "brief_summary": "Contains 1 subdirectory.",
+      "stats": {
+        "direct_dir_count": 1
+      },
+      "children": [
+        {
+          "path": "/abs/path/to/tests/index-fixtures",
+          "state": "ready",
+          "brief_summary": "Contains 4 files and 2 subdirectories."
+        }
+      ]
+    }
+  }
+}
+```
+
+**Text Output**
+
+```text
+/abs/path/to/tests
+  summary: Contains 1 subdirectory.
+  index-fixtures
+    summary: Contains 4 files and 2 subdirectories.
+    README.md - fixture tree for recursive indexing tests
+    notes.conf - localhost:8080 config
+```
+
+---
+
+### `index dirty`
+
+Mark existing `.aascribe_index_meta.json` files under one folder tree as stale.
+
+```
+aascribe index dirty <path>
+```
+
+Behavior notes:
+
+- Updates existing metadata files only.
+- Does not create missing metadata files.
+- Does not summarize source files.
+
+**Example**
+
+```bash
+aascribe index dirty ./tests
+```
+
+---
+
+### `index eval`
+
+Preview which folders and direct files need indexing, plus which ones are unchanged.
+
+```
+aascribe index eval <path>
+```
+
+Behavior notes:
+
+- Reads the current filesystem and existing local metadata files.
+- Folder state is local-only: child folder changes do not make the parent folder changed unless the parent's own direct files or metadata changed.
+- Uses `needs_index` and `unchanged` states for both folders and files.
+
+**Example**
+
+```bash
+aascribe index eval ./tests
+aascribe --format json index eval ./tests
+```
+
+---
+
+### `index clean`
+
+Remove generated index metadata artifacts under one directory tree.
+
+```
+aascribe index clean <path> [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<path>` | — | Directory root to clean recursively |
+| `--dry-run` | off | Show which `.aascribe_index_meta.json` files would be removed without deleting them |
+| `--force` | required | Required because this command removes generated files |
+
+**Example**
+
+```bash
+aascribe index clean ./tests --dry-run --force
+aascribe index clean ./docs --force
+```
+
+**Output**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "root": "/abs/path/to/tests",
+    "removed_paths": [
+      "/abs/path/to/tests/.aascribe_index_meta.json",
+      "/abs/path/to/tests/index-fixtures/.aascribe_index_meta.json"
+    ],
+    "removed_count": 2,
+    "dry_run": true
+  },
+  "meta": {
+    "command": "index",
+    "duration_ms": 1,
+    "store": "/Users/you/project-mem"
+  }
+}
+```
+
+---
+
 ### `describe`
 
 Summarize a single file.
@@ -302,11 +486,17 @@ aascribe describe <file> [flags]
 | `--length short\|medium\|long` | `medium` | Summary length |
 | `--focus <topic>` | — | Bias the summary toward a specific topic (e.g. `error handling`, `public API`) |
 
+Behavior notes:
+
+- `describe` uses the same file-analysis / summarization path as `index`.
+- When store config and secrets resolve successfully, `describe` uses the configured Gemini path.
+- When LLM config is unavailable, `describe` falls back to a deterministic local summary.
+
 **Example**
 
 ```bash
 aascribe describe ./src/poll.rs
-aascribe describe ./src/poll.rs --length long --focus "FOCAS retry logic"
+aascribe describe --length long --focus "FOCAS retry logic" ./src/poll.rs
 ```
 
 **OutputShape:** `FileDescription`

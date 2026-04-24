@@ -27,13 +27,13 @@ func TestParseInitStoreAndForce(t *testing.T) {
 	}
 }
 
-func TestParseDefaultFormatJSON(t *testing.T) {
+func TestParseDefaultFormatText(t *testing.T) {
 	parsed, err := cli.Parse([]string{"list"})
 	if err != nil {
 		t.Fatalf("expected parse success, got %v", err)
 	}
-	if parsed.Format != cli.FormatJSON {
-		t.Fatalf("expected default json format, got %q", parsed.Format)
+	if parsed.Format != cli.FormatText {
+		t.Fatalf("expected default text format, got %q", parsed.Format)
 	}
 }
 
@@ -89,6 +89,90 @@ func TestParseOutputGenerate(t *testing.T) {
 		t.Fatalf("expected output generate command, got %#v", parsed.Command)
 	}
 	if cmd.Lines != 20 || cmd.Width != 40 || cmd.Prefix != "demo" {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
+func TestParseIndexClean(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "clean", "./tests", "--dry-run", "--force"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.IndexCleanCommand)
+	if !ok {
+		t.Fatalf("expected index clean command, got %#v", parsed.Command)
+	}
+	if cmd.Path != "./tests" || !cmd.DryRun || !cmd.Force {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
+func TestParseIndexConcurrency(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "--concurrency", "6", "./tests"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.IndexCommand)
+	if !ok {
+		t.Fatalf("expected index command, got %#v", parsed.Command)
+	}
+	if cmd.Path != "./tests" || cmd.Concurrency != 6 {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
+func TestParseIndexMap(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "map", "./tests"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.MapCommand)
+	if !ok {
+		t.Fatalf("expected map command, got %#v", parsed.Command)
+	}
+	if cmd.Path != "./tests" {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
+func TestParseIndexDirty(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "dirty", "./tests"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.IndexDirtyCommand)
+	if !ok {
+		t.Fatalf("expected index dirty command, got %#v", parsed.Command)
+	}
+	if cmd.Path != "./tests" {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
+func TestParseIndexEval(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "eval", "./tests"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.IndexEvalCommand)
+	if !ok {
+		t.Fatalf("expected index eval command, got %#v", parsed.Command)
+	}
+	if cmd.Path != "./tests" {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
+func TestParseMap(t *testing.T) {
+	parsed, err := cli.Parse([]string{"map", "./tests"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.MapCommand)
+	if !ok {
+		t.Fatalf("expected map command, got %#v", parsed.Command)
+	}
+	if cmd.Path != "./tests" {
 		t.Fatalf("unexpected parsed command: %#v", cmd)
 	}
 }
@@ -226,6 +310,566 @@ func TestRunSummarizeHelpIncludesPurpose(t *testing.T) {
 	}
 }
 
+func TestRunIndexHelpMentionsIgnoreFiles(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"index", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, ".gitignore") || !strings.Contains(rendered, ".aaignore") {
+		t.Fatalf("expected index help to mention ignore files, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "--concurrency") {
+		t.Fatalf("expected index help to mention concurrency, got %q", rendered)
+	}
+	if !strings.Contains(rendered, ".aascribe_index_meta.json") {
+		t.Fatalf("expected index help to mention metadata file, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "aascribe index --depth 2 ./internal") {
+		t.Fatalf("expected index help examples to reflect current flag ordering, got %q", rendered)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+}
+
+func TestRunIndexCleanHelpMentionsForce(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"index", "clean", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, "--force") || !strings.Contains(rendered, ".aascribe_index_meta.json") {
+		t.Fatalf("expected index clean help text, got %q", rendered)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+}
+
+func TestRunIndexDirtyHelpMentionsDirtyMetadata(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"index", "dirty", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, ".aascribe_index_meta.json") || !strings.Contains(rendered, "stale") {
+		t.Fatalf("expected index dirty help text, got %q", rendered)
+	}
+}
+
+func TestRunIndexEvalHelpMentionsPreview(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"index", "eval", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, "preview") || !strings.Contains(rendered, "unchanged") {
+		t.Fatalf("expected index eval help text, got %q", rendered)
+	}
+}
+
+func TestRunDescribeReturnsFileDescription(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "settings.conf")
+	if err := os.WriteFile(path, []byte("host=localhost\nport=8080\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"--format", "json", "describe", "--length", "short", "--focus", "configuration", path}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Path        string `json:"path"`
+			Summary     string `json:"summary"`
+			Length      string `json:"length"`
+			Focus       string `json:"focus"`
+			GeneratedAt string `json:"generated_at"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal json: %v\n%s", err, stdout.String())
+	}
+	if !payload.OK {
+		t.Fatalf("expected ok response, got %s", stdout.String())
+	}
+	if payload.Data.Path != filepath.ToSlash(path) {
+		t.Fatalf("expected path %q, got %q", filepath.ToSlash(path), payload.Data.Path)
+	}
+	if payload.Data.Length != "short" || payload.Data.Focus != "configuration" {
+		t.Fatalf("unexpected data payload: %#v", payload.Data)
+	}
+	if payload.Data.Summary == "" || payload.Data.GeneratedAt == "" {
+		t.Fatalf("expected summary and generated_at, got %#v", payload.Data)
+	}
+}
+
+func TestRunIndexReturnsTree(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"--format", "json", "index", root}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Root string `json:"root"`
+			Tree struct {
+				Path     string `json:"path"`
+				Type     string `json:"type"`
+				Children []struct {
+					Path    string `json:"path"`
+					Type    string `json:"type"`
+					Summary string `json:"summary"`
+				} `json:"children"`
+			} `json:"tree"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal json: %v\n%s", err, stdout.String())
+	}
+	if !payload.OK {
+		t.Fatalf("expected ok response, got %s", stdout.String())
+	}
+	if payload.Data.Root != root {
+		t.Fatalf("expected root %q, got %q", root, payload.Data.Root)
+	}
+	if payload.Data.Tree.Type != "dir" {
+		t.Fatalf("expected root dir, got %q", payload.Data.Tree.Type)
+	}
+	if len(payload.Data.Tree.Children) != 1 {
+		t.Fatalf("expected one child, got %d", len(payload.Data.Tree.Children))
+	}
+	if payload.Data.Tree.Children[0].Type != "file" {
+		t.Fatalf("expected file child, got %q", payload.Data.Tree.Children[0].Type)
+	}
+}
+
+func TestRunIndexMapReturnsAssembledMap(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "guide.txt"), []byte("hello docs\n"), 0o644); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
+
+	var indexStdout bytes.Buffer
+	var indexStderr bytes.Buffer
+	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	if status != 0 {
+		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status = Run([]string{"--format", "json", "index", "map", root}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Root string `json:"root"`
+			Map  struct {
+				Path     string `json:"path"`
+				State    string `json:"state"`
+				Children []struct {
+					Path  string `json:"path"`
+					State string `json:"state"`
+				} `json:"children"`
+			} `json:"map"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal json: %v\n%s", err, stdout.String())
+	}
+	if !payload.OK {
+		t.Fatalf("expected ok response, got %s", stdout.String())
+	}
+	if payload.Data.Root != root {
+		t.Fatalf("expected root %q, got %q", root, payload.Data.Root)
+	}
+	if payload.Data.Map.State != "ready" {
+		t.Fatalf("expected ready map state, got %#v", payload.Data.Map)
+	}
+	if len(payload.Data.Map.Children) != 1 {
+		t.Fatalf("expected one child, got %#v", payload.Data.Map.Children)
+	}
+	if filepath.Base(payload.Data.Map.Children[0].Path) != "docs" {
+		t.Fatalf("expected docs child, got %#v", payload.Data.Map.Children)
+	}
+	if strings.Contains(stdout.String(), "\"last_updated\"") || strings.Contains(stdout.String(), "\"content_hash\"") {
+		t.Fatalf("expected map output to omit low-signal metadata fields, got %s", stdout.String())
+	}
+}
+
+func TestRunMapReturnsAssembledMap(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "guide.txt"), []byte("hello docs\n"), 0o644); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
+
+	var indexStdout bytes.Buffer
+	var indexStderr bytes.Buffer
+	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	if status != 0 {
+		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status = Run([]string{"--format", "json", "map", root}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Root string `json:"root"`
+			Map  struct {
+				Path     string `json:"path"`
+				State    string `json:"state"`
+				Children []struct {
+					Path  string `json:"path"`
+					State string `json:"state"`
+				} `json:"children"`
+			} `json:"map"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal json: %v\n%s", err, stdout.String())
+	}
+	if !payload.OK {
+		t.Fatalf("expected ok response, got %s", stdout.String())
+	}
+	if payload.Data.Root != root {
+		t.Fatalf("expected root %q, got %q", root, payload.Data.Root)
+	}
+	if payload.Data.Map.State != "ready" {
+		t.Fatalf("expected ready map state, got %#v", payload.Data.Map)
+	}
+	if len(payload.Data.Map.Children) != 1 {
+		t.Fatalf("expected one child, got %#v", payload.Data.Map.Children)
+	}
+	if filepath.Base(payload.Data.Map.Children[0].Path) != "docs" {
+		t.Fatalf("expected docs child, got %#v", payload.Data.Map.Children)
+	}
+	if strings.Contains(stdout.String(), "\"last_updated\"") || strings.Contains(stdout.String(), "\"content_hash\"") {
+		t.Fatalf("expected map output to omit low-signal metadata fields, got %s", stdout.String())
+	}
+}
+
+func TestRunMapOmitsIgnoredDirectories(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored/\n"), 0o644); err != nil {
+		t.Fatalf("write gitignore: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "guide.txt"), []byte("hello docs\n"), 0o644); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "ignored"), 0o755); err != nil {
+		t.Fatalf("mkdir ignored: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ignored", "secret.txt"), []byte("secret\n"), 0o644); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+
+	var indexStdout bytes.Buffer
+	var indexStderr bytes.Buffer
+	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	if status != 0 {
+		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status = Run([]string{"--format", "json", "map", root}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Map struct {
+				Children []struct {
+					Path string `json:"path"`
+				} `json:"children"`
+			} `json:"map"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal json: %v\n%s", err, stdout.String())
+	}
+	if !payload.OK {
+		t.Fatalf("expected ok response, got %s", stdout.String())
+	}
+	for _, child := range payload.Data.Map.Children {
+		if filepath.Base(child.Path) == "ignored" {
+			t.Fatalf("expected ignored directory to be omitted from map, got %#v", payload.Data.Map.Children)
+		}
+	}
+}
+
+func TestRunMapTextReturnsCompactTree(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "guide.txt"), []byte("hello docs\n"), 0o644); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
+
+	var indexStdout bytes.Buffer
+	var indexStderr bytes.Buffer
+	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	if status != 0 {
+		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status = Run([]string{"--format", "text", "map", root}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	rendered := stdout.String()
+	if !strings.Contains(rendered, filepath.Clean(root)) {
+		t.Fatalf("expected root path in text output, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "summary:") {
+		t.Fatalf("expected summary line in text output, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "main.go") || !strings.Contains(rendered, "docs") {
+		t.Fatalf("expected compact tree entries in text output, got %q", rendered)
+	}
+	if strings.Contains(rendered, "content_hash") || strings.Contains(rendered, "last_updated") || strings.Contains(rendered, "{") {
+		t.Fatalf("expected compact text tree instead of JSON-ish output, got %q", rendered)
+	}
+}
+
+func TestRunMapUnindexedNodeUsesSimpleStateAndGuide(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "docs", "level1", "level2"), 0o755); err != nil {
+		t.Fatalf("mkdir tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "level1", "guide.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
+
+	var indexStdout bytes.Buffer
+	var indexStderr bytes.Buffer
+	status := Run([]string{"--format", "json", "index", "--depth", "2", root}, &indexStdout, &indexStderr)
+	if status != 0 {
+		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status = Run([]string{"--format", "json", "map", root}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected map success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			StateGuide map[string]string `json:"state_guide"`
+			Map        struct {
+				Children []struct {
+					Path     string `json:"path"`
+					Children []struct {
+						Path     string `json:"path"`
+						Children []struct {
+							Path  string `json:"path"`
+							State string `json:"state"`
+						} `json:"children"`
+					} `json:"children"`
+				} `json:"children"`
+			} `json:"map"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal json: %v\n%s", err, stdout.String())
+	}
+	if !payload.OK {
+		t.Fatalf("expected ok response, got %s", stdout.String())
+	}
+	level2 := payload.Data.Map.Children[0].Children[0].Children[0]
+	if filepath.Base(level2.Path) != "level2" {
+		t.Fatalf("expected level2 node, got %#v", level2)
+	}
+	if level2.State != "unindexed" {
+		t.Fatalf("expected unindexed state, got %#v", level2)
+	}
+	if payload.Data.StateGuide["unindexed"] == "" || payload.Data.StateGuide["ready"] == "" {
+		t.Fatalf("expected state guide entries, got %#v", payload.Data.StateGuide)
+	}
+}
+
+func TestRunMapTextShowsStateGuideAndUnindexedState(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "docs", "level1", "level2"), 0o755); err != nil {
+		t.Fatalf("mkdir tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "level1", "guide.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
+
+	var indexStdout bytes.Buffer
+	var indexStderr bytes.Buffer
+	status := Run([]string{"--format", "json", "index", "--depth", "2", root}, &indexStdout, &indexStderr)
+	if status != 0 {
+		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status = Run([]string{"--format", "text", "map", root}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected map success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	rendered := stdout.String()
+	if !strings.Contains(rendered, "state guide:") {
+		t.Fatalf("expected state guide in text output, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "unindexed:") {
+		t.Fatalf("expected unindexed guide entry in text output, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "level2 [unindexed]") {
+		t.Fatalf("expected unindexed node in text output, got %q", rendered)
+	}
+}
+
+func TestRunIndexDirtyMarksMetadataDirty(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	var indexStdout bytes.Buffer
+	var indexStderr bytes.Buffer
+	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	if status != 0 {
+		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status = Run([]string{"--format", "json", "index", "dirty", root}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected dirty success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	content, err := os.ReadFile(filepath.Join(root, ".aascribe_index_meta.json"))
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if !strings.Contains(string(content), "\"dirty\": true") {
+		t.Fatalf("expected dirty metadata file, got %s", string(content))
+	}
+}
+
+func TestRunIndexEvalReturnsChangedAndUnchangedStates(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "keep.txt"), []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("write keep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "change.txt"), []byte("before\n"), 0o644); err != nil {
+		t.Fatalf("write change: %v", err)
+	}
+
+	var indexStdout bytes.Buffer
+	var indexStderr bytes.Buffer
+	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	if status != 0 {
+		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
+	}
+	if err := os.WriteFile(filepath.Join(root, "change.txt"), []byte("after\n"), 0o644); err != nil {
+		t.Fatalf("rewrite change: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status = Run([]string{"--format", "json", "index", "eval", root}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected eval success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Files []struct {
+				Path  string `json:"path"`
+				State string `json:"state"`
+			} `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal json: %v\n%s", err, stdout.String())
+	}
+	if !payload.OK {
+		t.Fatalf("expected ok response, got %s", stdout.String())
+	}
+	states := map[string]string{}
+	for _, file := range payload.Data.Files {
+		states[filepath.Base(file.Path)] = file.State
+	}
+	if states["change.txt"] != "needs_index" || states["keep.txt"] != "unchanged" {
+		t.Fatalf("unexpected eval file states: %#v", states)
+	}
+}
+
 func TestResolveStorePathPrefersExplicitFlag(t *testing.T) {
 	temp := t.TempDir()
 	explicit := filepath.Join(temp, "explicit-store")
@@ -291,7 +935,7 @@ func TestInitCreatesExpectedLayout(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	status := Run([]string{"--store", storePath, "init"}, &stdout, &stderr)
+	status := Run([]string{"--format", "json", "--store", storePath, "init"}, &stdout, &stderr)
 	if status != 0 {
 		t.Fatalf("expected success status, got %d with output %s", status, stdout.String())
 	}
@@ -323,7 +967,7 @@ func TestInitFailsWithoutForceWhenStoreExists(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	status := Run([]string{"--store", storePath, "init"}, &stdout, &stderr)
+	status := Run([]string{"--format", "json", "--store", storePath, "init"}, &stdout, &stderr)
 	if status != 1 {
 		t.Fatalf("expected runtime error status, got %d", status)
 	}
@@ -370,7 +1014,7 @@ func TestStubbedCommandReturnsNotImplemented(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	status := Run([]string{"--store", storePath, "list"}, &stdout, &stderr)
+	status := Run([]string{"--format", "json", "--store", storePath, "list"}, &stdout, &stderr)
 	if status != 1 {
 		t.Fatalf("expected runtime error status, got %d", status)
 	}
@@ -384,7 +1028,7 @@ func TestVerboseLogsGoToStderrWithoutCorruptingStdoutJSON(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	status := Run([]string{"--verbose", "--store", storePath, "init"}, &stdout, &stderr)
+	status := Run([]string{"--format", "json", "--verbose", "--store", storePath, "init"}, &stdout, &stderr)
 	if status != 0 {
 		t.Fatalf("expected success status, got %d", status)
 	}
@@ -404,7 +1048,7 @@ func TestLogsPathReturnsExpectedFilePath(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	status := Run([]string{"--store", storePath, "logs", "path"}, &stdout, &stderr)
+	status := Run([]string{"--format", "json", "--store", storePath, "logs", "path"}, &stdout, &stderr)
 	if status != 0 {
 		t.Fatalf("expected success status, got %d", status)
 	}
@@ -500,7 +1144,7 @@ func TestOutputHeadReadsStoredOutput(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	status := Run([]string{"--store", storePath, "output", "head", "out_000001", "--lines", "2"}, &stdout, &stderr)
+	status := Run([]string{"--format", "json", "--store", storePath, "output", "head", "out_000001", "--lines", "2"}, &stdout, &stderr)
 	if status != 0 {
 		t.Fatalf("expected output head success, got %d with stdout=%s stderr=%s", status, stdout.String(), stderr.String())
 	}
@@ -521,7 +1165,7 @@ func TestOutputGenerateSpillsAndReturnsTransportHint(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	status := Run([]string{"--store", storePath, "output", "generate", "--lines", "300", "--width", "120"}, &stdout, &stderr)
+	status := Run([]string{"--format", "json", "--store", storePath, "output", "generate", "--lines", "300", "--width", "120"}, &stdout, &stderr)
 	if status != 0 {
 		t.Fatalf("expected output generate success, got %d with stdout=%s stderr=%s", status, stdout.String(), stderr.String())
 	}

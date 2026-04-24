@@ -104,12 +104,45 @@ type IndexCommand struct {
 	Depth       int
 	Include     []string
 	Exclude     []string
+	Concurrency int
 	Refresh     bool
 	NoSummary   bool
 	MaxFileSize int64
 }
 
 func (c IndexCommand) Name() string { return "index" }
+
+type IndexCleanCommand struct {
+	Path   string
+	DryRun bool
+	Force  bool
+}
+
+func (c IndexCleanCommand) Name() string { return "index" }
+
+type IndexDirtyCommand struct {
+	Path string
+}
+
+func (c IndexDirtyCommand) Name() string { return "index" }
+
+type IndexEvalCommand struct {
+	Path string
+}
+
+func (c IndexEvalCommand) Name() string { return "index" }
+
+type IndexMapCommand struct {
+	Path string
+}
+
+func (c IndexMapCommand) Name() string { return "index" }
+
+type MapCommand struct {
+	Path string
+}
+
+func (c MapCommand) Name() string { return "map" }
 
 type DescribeCommand struct {
 	File    string
@@ -198,7 +231,7 @@ func (c ForgetCommand) Name() string { return "forget" }
 
 func Parse(args []string) (*Parsed, error) {
 	parsed := &Parsed{
-		Format: FormatJSON,
+		Format: FormatText,
 	}
 
 	rest, err := parseGlobals(args, parsed)
@@ -241,7 +274,7 @@ What This CLI Does:
 
 Global flags:
   --store <path>       Path to the memory store root
-  --format json|text   Output format (default: json)
+  --format json|text   Output format (default: text)
   --quiet, -q          Suppress all command output
   --verbose, -v        Enable verbose mode
   --help, -h           Show help
@@ -285,16 +318,19 @@ Current Implementation Status:
     output head
     output tail
     output slice
+    index
+    index clean
+    describe
     chat
     summarize
   CLI surface exists but command execution is still being implemented:
-    index, describe, remember, consolidate, recall, list, show, forget
+    remember, consolidate, recall, list, show, forget
 
 How To Get More Information:
   aascribe <command> --help
   aascribe logs --help
   Read docs/USAGE.md for the longer reference
-  Prefer --format json when another agent will parse the result
+  Default output is compact text for LLM reading; prefer --format json when another agent or tool will parse the result
 `)
 }
 
@@ -516,19 +552,95 @@ Examples:
 aascribe index - index one path for later recall and summarization
 
 Purpose:
-  Prepare repository content for faster later retrieval. This command is part of the intended workflow, but execution is not fully implemented yet.
+  Prepare repository content for faster later retrieval by walking one directory tree, summarizing direct files per folder, and recording local-only index metadata.
 
 Usage:
   aascribe index <path> [--depth <n>] [--include <glob>] [--exclude <glob>] [--refresh] [--no-summary] [--max-file-size <bytes>]
+  aascribe index dirty <path>
+  aascribe index eval <path>
+  aascribe index clean <path> [--dry-run] --force
+
+Behavior:
+  Treat .gitignore and .aaignore in each visited folder as blacklist exclude files during traversal.
+  Detect text files from file content instead of filename extension.
+  Write .aascribe_index_meta.json in each indexed folder with local-only metadata for that folder.
+  Use --concurrency to bound direct-file processing across the whole index run.
+  Use index dirty to mark existing metadata stale so the next index run rebuilds it.
+  Use index eval to preview which folders and direct files need indexing and which ones are unchanged.
+  Use index clean to remove generated .aascribe_index_meta.json files recursively.
 
 Examples:
   aascribe index .
-  aascribe index ./internal --depth 2
-  aascribe --store ./project-mem index . --exclude vendor
+  aascribe index --depth 2 ./internal
+  aascribe index --concurrency 4 ./internal
+  aascribe --store ./project-mem index --exclude vendor .
+  aascribe index dirty ./internal
+  aascribe index eval ./internal
+  aascribe index clean ./tests --dry-run --force
 
 Further Info:
   aascribe --help
   Read docs/USAGE.md and docs/tasks/index-tasks.md for design context
+`)
+	case "index clean":
+		return strings.TrimSpace(`
+aascribe index clean - remove generated index metadata artifacts
+
+Purpose:
+  Recursively remove .aascribe_index_meta.json files created by aascribe index under one root path.
+
+Usage:
+  aascribe index clean <path> [--dry-run] --force
+
+Required Flags:
+  --force     Required because this command removes generated files
+
+Optional Flags:
+  --dry-run   Show which files would be removed without deleting them
+
+Examples:
+  aascribe index clean ./tests --dry-run --force
+  aascribe index clean ./docs --force
+
+Next Steps:
+  Run aascribe index <path> again to regenerate metadata
+  Use aascribe index --help for indexing behavior details
+`)
+	case "index dirty":
+		return strings.TrimSpace(`
+aascribe index dirty - mark existing index metadata as stale
+
+Purpose:
+  Mark .aascribe_index_meta.json files under one folder tree as dirty so the next index run rebuilds them instead of reusing unchanged file metadata.
+
+Usage:
+  aascribe index dirty <path>
+
+Examples:
+  aascribe index dirty ./internal
+  aascribe index dirty ./tests
+
+Notes:
+  This command only updates existing metadata files.
+  It does not create missing metadata files and does not summarize source files.
+`)
+	case "index eval":
+		return strings.TrimSpace(`
+aascribe index eval - preview what index would rebuild
+
+Purpose:
+  Evaluate one folder tree against current local metadata and report which folders and direct files need indexing, plus which ones are unchanged.
+
+Usage:
+  aascribe index eval <path>
+
+Examples:
+  aascribe index eval ./internal
+  aascribe index eval ./tests
+
+Notes:
+  This command does not write metadata.
+  Folder state is local-only: child folder changes do not make the parent folder changed unless the parent's own direct files or metadata changed.
 `)
 	case "describe":
 		return strings.TrimSpace(`
@@ -542,8 +654,8 @@ Usage:
 
 Examples:
   aascribe describe ./README.md
-  aascribe describe ./internal/app/app.go --length short
-  aascribe describe ./internal/cli/cli.go --focus help
+  aascribe describe --length short ./internal/app/app.go
+  aascribe describe --focus help ./internal/cli/cli.go
 
 Further Info:
   aascribe --help
@@ -833,6 +945,8 @@ func parseSubcommand(name string, args []string) (Command, error) {
 		return parseOutput(args)
 	case "index":
 		return parseIndex(args)
+	case "map":
+		return parseMap(args)
 	case "describe":
 		return parseDescribe(args)
 	case "remember":
@@ -1011,15 +1125,29 @@ func parseInit(args []string) (Command, error) {
 }
 
 func parseIndex(args []string) (Command, error) {
+	if len(args) > 0 && args[0] == "clean" {
+		return parseIndexClean(args[1:])
+	}
+	if len(args) > 0 && args[0] == "dirty" {
+		return parseIndexDirty(args[1:])
+	}
+	if len(args) > 0 && args[0] == "eval" {
+		return parseIndexEval(args[1:])
+	}
+	if len(args) > 0 && args[0] == "map" {
+		return parseMap(args[1:])
+	}
 	fs := newFlagSet("index")
 	var cmd IndexCommand
 	cmd.Depth = 3
+	cmd.Concurrency = 4
 	cmd.MaxFileSize = 1_048_576
 	var include stringSlice
 	var exclude stringSlice
 	fs.IntVar(&cmd.Depth, "depth", 3, "")
 	fs.Var(&include, "include", "")
 	fs.Var(&exclude, "exclude", "")
+	fs.IntVar(&cmd.Concurrency, "concurrency", 4, "")
 	fs.BoolVar(&cmd.Refresh, "refresh", false, "")
 	fs.BoolVar(&cmd.NoSummary, "no-summary", false, "")
 	fs.Int64Var(&cmd.MaxFileSize, "max-file-size", 1_048_576, "")
@@ -1029,9 +1157,83 @@ func parseIndex(args []string) (Command, error) {
 	if len(fs.Args()) != 1 {
 		return nil, newParseError(ParseErrorMissingRequiredArg, "index", "path", "index requires exactly one path argument.")
 	}
+	if cmd.Concurrency <= 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--concurrency", "Invalid value for --concurrency: %d.", cmd.Concurrency)
+	}
 	cmd.Path = fs.Args()[0]
 	cmd.Include = include
 	cmd.Exclude = exclude
+	return cmd, nil
+}
+
+func parseIndexMap(args []string) (Command, error) {
+	return parseMap(args)
+}
+
+func parseIndexDirty(args []string) (Command, error) {
+	fs := newFlagSet("index dirty")
+	var cmd IndexDirtyCommand
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 1 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "index dirty", "path", "index dirty requires exactly one path argument.")
+	}
+	cmd.Path = fs.Args()[0]
+	return cmd, nil
+}
+
+func parseIndexEval(args []string) (Command, error) {
+	fs := newFlagSet("index eval")
+	var cmd IndexEvalCommand
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 1 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "index eval", "path", "index eval requires exactly one path argument.")
+	}
+	cmd.Path = fs.Args()[0]
+	return cmd, nil
+}
+
+func parseMap(args []string) (Command, error) {
+	fs := newFlagSet("index map")
+	var cmd MapCommand
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 1 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "map", "path", "map requires exactly one path argument.")
+	}
+	cmd.Path = fs.Args()[0]
+	return cmd, nil
+}
+
+func parseIndexClean(args []string) (Command, error) {
+	fs := newFlagSet("index clean")
+	var cmd IndexCleanCommand
+	fs.BoolVar(&cmd.DryRun, "dry-run", false, "")
+	fs.BoolVar(&cmd.Force, "force", false, "")
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		cmd.Path = args[0]
+		if err := fs.Parse(args[1:]); err != nil {
+			return nil, err
+		}
+		if len(fs.Args()) != 0 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index clean", "path", "index clean requires exactly one path argument.")
+		}
+	} else {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		if len(fs.Args()) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index clean", "path", "index clean requires exactly one path argument.")
+		}
+		cmd.Path = fs.Args()[0]
+	}
+	if !cmd.Force {
+		return nil, newParseError(ParseErrorMissingRequiredFlag, "index clean", "--force", "index clean requires --force.")
+	}
 	return cmd, nil
 }
 

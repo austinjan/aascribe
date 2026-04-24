@@ -5,17 +5,21 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/austinjan/aascribe/internal/apperr"
 	"github.com/austinjan/aascribe/internal/cli"
 	"github.com/austinjan/aascribe/internal/config"
+	"github.com/austinjan/aascribe/internal/index"
 	"github.com/austinjan/aascribe/internal/llm"
 	"github.com/austinjan/aascribe/internal/logging"
 	"github.com/austinjan/aascribe/internal/output"
 	"github.com/austinjan/aascribe/internal/store"
 	"github.com/austinjan/aascribe/pkg/llmoutput"
 )
+
+var promptRunner = runPrompt
 
 func Execute(command cli.Command, storePath string) (*output.CommandResult, error) {
 	switch cmd := command.(type) {
@@ -42,9 +46,19 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 	case cli.OutputSliceCommand:
 		return runOutputSlice(storePath, cmd.ID, cmd.Offset, cmd.Limit)
 	case cli.IndexCommand:
-		return nil, apperr.NotImplemented(cmd.Name())
+		return runIndex(storePath, cmd)
+	case cli.IndexCleanCommand:
+		return runIndexClean(cmd)
+	case cli.IndexDirtyCommand:
+		return runIndexDirty(cmd)
+	case cli.IndexEvalCommand:
+		return runIndexEval(cmd)
+	case cli.IndexMapCommand:
+		return runIndexMap(cmd)
+	case cli.MapCommand:
+		return runMap(cmd)
 	case cli.DescribeCommand:
-		return nil, apperr.NotImplemented(cmd.Name())
+		return runDescribe(storePath, cmd)
 	case cli.RememberCommand:
 		return nil, apperr.NotImplemented(cmd.Name())
 	case cli.ConsolidateCommand:
@@ -64,6 +78,114 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 	default:
 		return nil, apperr.NotImplemented("unknown")
 	}
+}
+
+func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, error) {
+	summarizer := buildLLMSummarizer(storePath)
+	result, err := index.Build(index.Options{
+		Root:                cmd.Path,
+		Depth:               cmd.Depth,
+		Include:             cmd.Include,
+		Exclude:             cmd.Exclude,
+		MaxConcurrency:      cmd.Concurrency,
+		Refresh:             cmd.Refresh,
+		NoSummary:           cmd.NoSummary,
+		MaxFileSize:         cmd.MaxFileSize,
+		Summarizer:          summarizer,
+		FailureNoticeWriter: os.Stderr,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &output.CommandResult{
+		Data: result,
+		Text: renderIndexText(result),
+	}, nil
+}
+
+func runIndexClean(cmd cli.IndexCleanCommand) (*output.CommandResult, error) {
+	result, err := index.CleanArtifacts(cmd.Path, cmd.DryRun)
+	if err != nil {
+		return nil, err
+	}
+
+	text := fmt.Sprintf("Removed %d index artifact(s) under %s", result.RemovedCount, result.Root)
+	if result.DryRun {
+		text = fmt.Sprintf("Would remove %d index artifact(s) under %s", result.RemovedCount, result.Root)
+	}
+
+	return &output.CommandResult{
+		Data: result,
+		Text: text,
+	}, nil
+}
+
+func runIndexDirty(cmd cli.IndexDirtyCommand) (*output.CommandResult, error) {
+	result, err := index.MarkDirty(cmd.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	text := fmt.Sprintf("No index metadata files found under %s", result.Root)
+	if result.MarkedCount > 0 {
+		text = fmt.Sprintf("Marked %d index metadata file(s) dirty under %s", result.MarkedCount, result.Root)
+	}
+	return &output.CommandResult{
+		Data: result,
+		Text: text,
+	}, nil
+}
+
+func runIndexEval(cmd cli.IndexEvalCommand) (*output.CommandResult, error) {
+	result, err := index.Eval(cmd.Path)
+	if err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: result,
+		Text: renderEvalText(result),
+	}, nil
+}
+
+func runIndexMap(cmd cli.IndexMapCommand) (*output.CommandResult, error) {
+	result, err := index.BuildMap(cmd.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	return &output.CommandResult{
+		Data: result,
+		Text: renderMapText(result),
+	}, nil
+}
+
+func runMap(cmd cli.MapCommand) (*output.CommandResult, error) {
+	result, err := index.BuildMap(cmd.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	return &output.CommandResult{
+		Data: result,
+		Text: renderMapText(result),
+	}, nil
+}
+
+func runDescribe(storePath string, cmd cli.DescribeCommand) (*output.CommandResult, error) {
+	result, err := describeWithFallback(storePath, cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	return &output.CommandResult{
+		Data: result,
+		Text: result.Summary,
+	}, nil
+}
+
+func describeWithFallback(storePath string, cmd cli.DescribeCommand) (*index.FileDescription, error) {
+	return index.DescribeFileWithSummarizer(cmd.File, cmd.Length, cmd.Focus, buildLLMSummarizer(storePath))
 }
 
 func runLogsPath(storePath string) *output.CommandResult {
@@ -146,6 +268,118 @@ func runInit(storePath string, force bool) (*output.CommandResult, error) {
 		},
 		Text: text,
 	}, nil
+}
+
+func renderMapText(result *index.PathIndexMap) string {
+	if result == nil {
+		return ""
+	}
+	var lines []string
+	if len(result.StateGuide) > 0 {
+		lines = append(lines, "state guide:")
+		keys := make([]string, 0, len(result.StateGuide))
+		for key := range result.StateGuide {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			lines = append(lines, "  "+key+": "+result.StateGuide[key])
+		}
+	}
+	var walk func(node index.IndexMapNode, depth int)
+	walk = func(node index.IndexMapNode, depth int) {
+		indent := strings.Repeat("  ", depth)
+		label := filepath.Base(node.Path)
+		if depth == 0 {
+			label = filepath.Clean(node.Path)
+		}
+		line := indent + label
+		if node.State != "" && node.State != "ready" {
+			line += " [" + node.State + "]"
+		}
+		lines = append(lines, line)
+		if node.BriefSummary != "" {
+			lines = append(lines, indent+"  "+"summary: "+node.BriefSummary)
+		}
+		if node.State == "unindexed" {
+			return
+		}
+		for _, file := range node.Files {
+			fileLine := indent + "  " + filepath.Base(file.Path)
+			if file.Status != "" && file.Status != "ok" {
+				fileLine += " [" + file.Status + "]"
+			}
+			detail := file.Summary
+			if detail == "" {
+				detail = file.FileType
+			}
+			if detail != "" {
+				fileLine += " - " + detail
+			}
+			lines = append(lines, fileLine)
+		}
+		for _, child := range node.Children {
+			walk(child, depth+1)
+		}
+	}
+	walk(result.Map, 0)
+	return strings.Join(lines, "\n")
+}
+
+func renderEvalText(result *index.EvalResult) string {
+	if result == nil {
+		return ""
+	}
+
+	lines := []string{"index eval: " + result.Root}
+	needsFolders, unchangedFolders := partitionEvalFolders(result.Folders)
+	needsFiles, unchangedFiles := partitionEvalFiles(result.Files)
+
+	lines = append(lines, fmt.Sprintf("folders needing index: %d", len(needsFolders)))
+	for _, item := range needsFolders {
+		lines = append(lines, "  "+item.Path+" ["+item.Reason+"]")
+	}
+	lines = append(lines, fmt.Sprintf("unchanged folders: %d", len(unchangedFolders)))
+	for _, item := range unchangedFolders {
+		lines = append(lines, "  "+item.Path)
+	}
+
+	lines = append(lines, fmt.Sprintf("files needing index: %d", len(needsFiles)))
+	for _, item := range needsFiles {
+		lines = append(lines, "  "+item.Path+" ["+item.Reason+"]")
+	}
+	lines = append(lines, fmt.Sprintf("unchanged files: %d", len(unchangedFiles)))
+	for _, item := range unchangedFiles {
+		lines = append(lines, "  "+item.Path)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func partitionEvalFolders(items []index.EvalFolder) ([]index.EvalFolder, []index.EvalFolder) {
+	var needs []index.EvalFolder
+	var unchanged []index.EvalFolder
+	for _, item := range items {
+		if item.State == "needs_index" {
+			needs = append(needs, item)
+			continue
+		}
+		unchanged = append(unchanged, item)
+	}
+	return needs, unchanged
+}
+
+func partitionEvalFiles(items []index.EvalFile) ([]index.EvalFile, []index.EvalFile) {
+	var needs []index.EvalFile
+	var unchanged []index.EvalFile
+	for _, item := range items {
+		if item.State == "needs_index" {
+			needs = append(needs, item)
+			continue
+		}
+		unchanged = append(unchanged, item)
+	}
+	return needs, unchanged
 }
 
 func runChat(storePath, prompt string) (*output.CommandResult, error) {
@@ -249,6 +483,27 @@ func runOutputGenerate(cmd cli.OutputGenerateCommand) (*output.CommandResult, er
 		Text:           text,
 		PrimaryTextKey: "text",
 	}, nil
+}
+
+func renderIndexText(result *index.PathIndexTree) string {
+	var lines []string
+	var walk func(node index.IndexedPathNode, depth int)
+	walk = func(node index.IndexedPathNode, depth int) {
+		prefix := strings.Repeat("  ", depth)
+		line := prefix + node.Path
+		if node.Type == "dir" {
+			line += "/"
+		}
+		if node.Summary != "" {
+			line += " - " + node.Summary
+		}
+		lines = append(lines, line)
+		for _, child := range node.Children {
+			walk(child, depth+1)
+		}
+	}
+	walk(result.Tree, 0)
+	return strings.Join(lines, "\n")
 }
 
 func runOutputMeta(storePath, id string) (*output.CommandResult, error) {
@@ -367,6 +622,44 @@ File path: %s
 
 File content:
 %s`, sourcePath, content)
+}
+
+func buildDescribePrompt(sourcePath, content, length, focus string) string {
+	focusInstruction := "No special focus."
+	if focus != "" {
+		focusInstruction = "Prioritize this focus area: " + focus + "."
+	}
+
+	return fmt.Sprintf(`You are summarizing one file for aascribe describe.
+
+Write exactly one concise paragraph.
+
+Requirements:
+- Summary length target: %s
+- %s
+- Explain the file's purpose and the most important visible content.
+- Be specific and factual.
+- Do not mention unseen context.
+- Do not use bullets.
+
+File path: %s
+
+File content:
+%s`, length, focusInstruction, sourcePath, content)
+}
+
+func buildLLMSummarizer(storePath string) index.SummarizerFunc {
+	resolved, err := config.Resolve(storePath, config.ResolveOptions{}, nil)
+	if err != nil {
+		return nil
+	}
+	return func(path, content, length, focus string) (string, error) {
+		response, err := promptRunner(resolved, buildDescribePrompt(path, content, length, focus))
+		if err != nil {
+			return "", err
+		}
+		return response.Text, nil
+	}
 }
 
 func copyFile(sourcePath, outputPath string) error {
