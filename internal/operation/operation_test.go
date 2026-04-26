@@ -1,9 +1,11 @@
 package operation
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestCreateWritesInitialStatusSnapshot(t *testing.T) {
@@ -285,6 +287,47 @@ func TestCancelSucceededOperationIsRejected(t *testing.T) {
 
 	if _, err := Cancel(storePath, accepted.OperationID); err == nil {
 		t.Fatalf("expected terminal operation cancel to fail")
+	}
+}
+
+func TestContextWithCancelWatchCancelsWhenOperationIsCanceled(t *testing.T) {
+	storePath := t.TempDir()
+
+	accepted, err := Create(storePath, CreateInput{Command: "index"})
+	if err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+
+	ctx, stop := ContextWithCancelWatchInterval(context.Background(), storePath, accepted.OperationID, time.Millisecond)
+	defer stop()
+
+	if _, err := Cancel(storePath, accepted.OperationID); err != nil {
+		t.Fatalf("cancel operation: %v", err)
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatalf("expected watched context to be canceled")
+	}
+}
+
+func TestContextWithCancelWatchStopIsIdempotent(t *testing.T) {
+	storePath := t.TempDir()
+
+	accepted, err := Create(storePath, CreateInput{Command: "index"})
+	if err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+
+	ctx, stop := ContextWithCancelWatchInterval(context.Background(), storePath, accepted.OperationID, time.Millisecond)
+	stop()
+	stop()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatalf("expected stopped context to be canceled")
 	}
 }
 
