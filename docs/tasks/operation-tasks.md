@@ -624,16 +624,18 @@ Completed outputs:
 
 ### Task 3.2: Integrate cancellation
 
-Status: completed for `index --async`; not generalized to future commands.
+Status: completed.
 
 - thread `context.Context` into long-running engines
 - ensure cancellation updates operation state consistently
 - make partial completion behavior explicit
 
-Current gap:
+Completed outputs:
 
-- `index --async` watches persisted operation state and cancels its context when `operation cancel` marks the operation canceled
-- future commands will need to opt into the same cancellation pattern
+- `operation cancel` persists a terminal canceled lifecycle state and result
+- shared operation cancellation watching now provides a reusable `context.Context` for async command workers
+- `index --async` uses the shared cancel-watch context instead of command-local watcher plumbing
+- future async commands can opt into the same cancellation pattern without duplicating index-specific polling code
 
 Concrete cases:
 

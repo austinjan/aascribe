@@ -232,10 +232,8 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 		},
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan struct{})
-	go watchOperationCancel(storePath, operationID, cancel, done)
+	ctx, stopCancelWatch := operation.ContextWithCancelWatch(context.Background(), storePath, operationID)
+	defer stopCancelWatch()
 
 	result, err := index.Build(index.Options{
 		Context:             ctx,
@@ -250,7 +248,6 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 		Summarizer:          buildLLMSummarizer(storePath),
 		FailureNoticeWriter: io.Discard,
 	})
-	close(done)
 
 	current, loadErr := operation.LoadStatus(storePath, operationID)
 	if loadErr != nil {
@@ -306,23 +303,6 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 	}
 	_ = reporter.Report(operation.Report{Stage: "complete", Message: "Index operation completed."})
 	return &output.CommandResult{Data: result, Text: renderIndexText(result)}, nil
-}
-
-func watchOperationCancel(storePath, operationID string, cancel context.CancelFunc, done <-chan struct{}) {
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-done:
-			return
-		case <-ticker.C:
-			status, err := operation.LoadStatus(storePath, operationID)
-			if err == nil && status.State == operation.StateCanceled {
-				cancel()
-				return
-			}
-		}
-	}
 }
 
 func runIndexClean(cmd cli.IndexCleanCommand) (*output.CommandResult, error) {

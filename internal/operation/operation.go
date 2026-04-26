@@ -2,6 +2,7 @@ package operation
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/austinjan/aascribe/internal/apperr"
@@ -129,6 +131,8 @@ var nowUTC = func() time.Time {
 	return time.Now().UTC()
 }
 
+const DefaultCancelPollInterval = 200 * time.Millisecond
+
 func Create(storePath string, input CreateInput) (*Accepted, error) {
 	if strings.TrimSpace(input.Command) == "" {
 		return nil, apperr.InvalidArguments("operation create requires a non-empty command name.")
@@ -177,6 +181,51 @@ func NewReporter(storePath, operationID string) *Reporter {
 	return &Reporter{
 		storePath:   storePath,
 		operationID: operationID,
+	}
+}
+
+func ContextWithCancelWatch(parent context.Context, storePath, operationID string) (context.Context, func()) {
+	return ContextWithCancelWatchInterval(parent, storePath, operationID, DefaultCancelPollInterval)
+}
+
+func ContextWithCancelWatchInterval(parent context.Context, storePath, operationID string, interval time.Duration) (context.Context, func()) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if interval <= 0 {
+		interval = DefaultCancelPollInterval
+	}
+
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			close(done)
+			cancel()
+		})
+	}
+
+	go watchCancel(ctx, storePath, operationID, interval, cancel, done)
+	return ctx, stop
+}
+
+func watchCancel(ctx context.Context, storePath, operationID string, interval time.Duration, cancel context.CancelFunc, done <-chan struct{}) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-ticker.C:
+			status, err := LoadStatus(storePath, operationID)
+			if err == nil && status.State == StateCanceled {
+				cancel()
+				return
+			}
+		}
 	}
 }
 
