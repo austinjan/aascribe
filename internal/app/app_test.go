@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/austinjan/aascribe/internal/cli"
+	"github.com/austinjan/aascribe/internal/config"
 	"github.com/austinjan/aascribe/internal/operation"
 	"github.com/austinjan/aascribe/internal/store"
 	"github.com/austinjan/aascribe/pkg/llmoutput"
@@ -206,6 +207,26 @@ func TestParseIndexFlagsAfterPath(t *testing.T) {
 	}
 	if len(cmd.Include) != 2 || cmd.Include[0] != "*.go" || cmd.Include[1] != "*.md" {
 		t.Fatalf("unexpected include flags: %#v", cmd.Include)
+	}
+}
+
+func TestParseSearch(t *testing.T) {
+	parsed, err := cli.Parse([]string{"search", "zprofile", "./docs", "--engine", "builtin", "--ignore-case", "--fixed-strings", "--glob", "*.md", "--max-count", "5"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.SearchCommand)
+	if !ok {
+		t.Fatalf("expected search command, got %#v", parsed.Command)
+	}
+	if cmd.Query != "zprofile" || cmd.Path != "./docs" || cmd.Engine != "builtin" {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+	if !cmd.IgnoreCase || !cmd.FixedStrings || cmd.MaxCount != 5 {
+		t.Fatalf("unexpected search flags: %#v", cmd)
+	}
+	if len(cmd.Glob) != 1 || cmd.Glob[0] != "*.md" {
+		t.Fatalf("unexpected glob flags: %#v", cmd.Glob)
 	}
 }
 
@@ -613,6 +634,92 @@ func TestRunDescribeReturnsFileDescription(t *testing.T) {
 	}
 	if payload.Data.Summary == "" || payload.Data.GeneratedAt == "" {
 		t.Fatalf("expected summary and generated_at, got %#v", payload.Data)
+	}
+}
+
+func TestRunSearchReturnsLineMatches(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.md"), []byte("alpha\nzprofile setup\nZPROFILE again\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "skip.txt"), []byte("zprofile outside glob\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := Run([]string{"--format", "json", "search", "zprofile", root, "--engine", "builtin", "--ignore-case", "--fixed-strings", "--glob", "*.md"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Query      string `json:"query"`
+			Engine     string `json:"engine"`
+			MatchCount int    `json:"match_count"`
+			Matches    []struct {
+				Path   string `json:"path"`
+				Line   int    `json:"line"`
+				Column int    `json:"column"`
+				Text   string `json:"text"`
+			} `json:"matches"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal json: %v\n%s", err, stdout.String())
+	}
+	if !payload.OK || payload.Data.Query != "zprofile" || payload.Data.Engine != "builtin" {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+	if payload.Data.MatchCount != 2 || len(payload.Data.Matches) != 2 {
+		t.Fatalf("expected two matches, got %#v", payload.Data)
+	}
+	if payload.Data.Matches[0].Path != "notes.md" || payload.Data.Matches[0].Line != 2 || payload.Data.Matches[0].Column != 1 {
+		t.Fatalf("unexpected first match: %#v", payload.Data.Matches[0])
+	}
+}
+
+func TestRunSearchSupportsRegexPattern(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "code.go"), []byte("package demo\nfunc runSearch() {}\nfunc runIndex() {}\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := Run([]string{"--format", "json", "search", `func run(Search|Index)`, root, "--engine", "builtin", "--glob", "*.go"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	var payload struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Engine     string `json:"engine"`
+			MatchCount int    `json:"match_count"`
+			Matches    []struct {
+				Path string `json:"path"`
+				Line int    `json:"line"`
+				Text string `json:"text"`
+			} `json:"matches"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal json: %v\n%s", err, stdout.String())
+	}
+	if !payload.OK || payload.Data.Engine != "builtin" {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+	if payload.Data.MatchCount != 2 || len(payload.Data.Matches) != 2 {
+		t.Fatalf("expected two regex matches, got %#v", payload.Data)
+	}
+	if payload.Data.Matches[0].Line != 2 || !strings.Contains(payload.Data.Matches[0].Text, "runSearch") {
+		t.Fatalf("unexpected first regex match: %#v", payload.Data.Matches[0])
+	}
+	if payload.Data.Matches[1].Line != 3 || !strings.Contains(payload.Data.Matches[1].Text, "runIndex") {
+		t.Fatalf("unexpected second regex match: %#v", payload.Data.Matches[1])
 	}
 }
 
@@ -1154,6 +1261,21 @@ func TestInitCreatesExpectedLayout(t *testing.T) {
 	assertExists(t, filepath.Join(storePath, "outputs"))
 	assertExists(t, filepath.Join(storePath, "operations"))
 	assertExists(t, filepath.Join(storePath, "layout.json"))
+	configPath := config.ConfigPath(storePath)
+	assertExists(t, configPath)
+	if data["config_path"] != configPath {
+		t.Fatalf("expected config_path %q, got %#v", configPath, data["config_path"])
+	}
+	if data["config_created"] != true {
+		t.Fatalf("expected config_created=true, got %#v", data["config_created"])
+	}
+	configBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("expected config file to be readable, got %v", err)
+	}
+	if !strings.Contains(string(configBytes), `api_key_env = "GEMINI_API_KEY"`) {
+		t.Fatalf("expected default Gemini config template, got %s", string(configBytes))
+	}
 }
 
 func TestInitFailsWithoutForceWhenStoreExists(t *testing.T) {
@@ -1204,8 +1326,68 @@ func TestInitReportsTextOutput(t *testing.T) {
 	if !strings.Contains(rendered, expected) {
 		t.Fatalf("expected %q in output, got %q", expected, rendered)
 	}
-	if !strings.Contains(rendered, "next: aascribe logs path") {
-		t.Fatalf("expected next-step hint, got %q", rendered)
+	if !strings.Contains(rendered, "config: "+config.ConfigPath(storePath)) {
+		t.Fatalf("expected config path hint, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "next: set GEMINI_API_KEY") {
+		t.Fatalf("expected LLM secret next-step hint, got %q", rendered)
+	}
+}
+
+func TestInitPreservesExistingConfig(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "aascribe-store")
+	assertNoError(t, os.MkdirAll(storePath, 0o755))
+	configPath := config.ConfigPath(storePath)
+	customConfig := []byte("[llm]\nprovider = \"gemini\"\nmodel = \"custom\"\napi_key_env = \"CUSTOM_KEY\"\ntimeout_seconds = 30\n")
+	assertNoError(t, os.MkdirAll(config.ConfigDir(storePath), 0o755))
+	assertNoError(t, os.WriteFile(configPath, customConfig, 0o644))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := Run([]string{"--format", "json", "--store", storePath, "init", "--force"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d with output %s", status, stdout.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected valid json output, got %v", err)
+	}
+	data := payload["data"].(map[string]any)
+	if data["config_created"] != false {
+		t.Fatalf("expected config_created=false, got %#v", data["config_created"])
+	}
+	bytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("expected config file to remain readable, got %v", err)
+	}
+	if string(bytes) != string(customConfig) {
+		t.Fatalf("expected existing config to be preserved, got %s", string(bytes))
+	}
+}
+
+func TestLLMCommandAfterInitReportsMissingSecretNotMissingConfig(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "aascribe-store")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"--store", storePath, "init"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected init success, got %d with output %s", status, stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	t.Setenv("GEMINI_API_KEY", "")
+	status = Run([]string{"--format", "json", "--store", storePath, "chat", "hello"}, &stdout, &stderr)
+	if status != 1 {
+		t.Fatalf("expected missing secret runtime failure, got %d with output %s", status, stdout.String())
+	}
+	if strings.Contains(stdout.String(), "CONFIG_NOT_FOUND") {
+		t.Fatalf("expected config to exist after init, got %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "MISSING_SECRET") {
+		t.Fatalf("expected missing secret guidance, got %s", stdout.String())
 	}
 }
 

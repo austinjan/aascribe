@@ -541,8 +541,8 @@ func TestIndexManagementTextOutputsIncludeUsefulNextHints(t *testing.T) {
 
 func writeConfig(t *testing.T, storePath, body string) {
 	t.Helper()
-	if err := os.MkdirAll(storePath, 0o755); err != nil {
-		t.Fatalf("mkdir failed: %v", err)
+	if err := os.MkdirAll(config.ConfigDir(storePath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir failed: %v", err)
 	}
 	if err := os.WriteFile(config.ConfigPath(storePath), []byte(body), 0o644); err != nil {
 		t.Fatalf("write config failed: %v", err)

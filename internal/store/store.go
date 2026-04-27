@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/austinjan/aascribe/internal/apperr"
+	"github.com/austinjan/aascribe/internal/config"
 )
 
 const layoutVersion = "bootstrap-v1"
@@ -16,6 +17,8 @@ var managedFiles = []string{"layout.json"}
 type InitOutcome struct {
 	Created       bool
 	Reinitialized bool
+	ConfigPath    string
+	ConfigCreated bool
 }
 
 func ResolveStorePath(explicit string) (string, error) {
@@ -82,9 +85,17 @@ func InitializeStore(path string, force bool) (*InitOutcome, error) {
 		return nil, apperr.IOError("Failed to write layout metadata: %s.", layoutPath)
 	}
 
+	configPath := config.ConfigPath(path)
+	configCreated, err := ensureDefaultConfig(configPath)
+	if err != nil {
+		return nil, err
+	}
+
 	return &InitOutcome{
 		Created:       !existedBefore,
 		Reinitialized: existedBefore && force,
+		ConfigPath:    configPath,
+		ConfigCreated: configCreated,
 	}, nil
 }
 
@@ -124,4 +135,33 @@ func removeIfExists(path string) error {
 		return apperr.IOError("Failed to reset managed file: %s.", path)
 	}
 	return nil
+}
+
+func ensureDefaultConfig(path string) (bool, error) {
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, apperr.IOError("Failed to inspect config file: %s.", path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, apperr.IOError("Failed to create config directory: %s.", filepath.Dir(path))
+	}
+
+	config := `[llm]
+provider = "gemini"
+model = "gemini-2.5-flash"
+api_key_env = "GEMINI_API_KEY"
+timeout_seconds = 30
+
+[defaults]
+format = "json"
+
+[index]
+max_file_size = 1048576
+default_depth = 3
+`
+	if err := os.WriteFile(path, []byte(config), 0o644); err != nil {
+		return false, apperr.IOError("Failed to write default config file: %s.", path)
+	}
+	return true, nil
 }

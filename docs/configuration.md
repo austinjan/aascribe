@@ -17,19 +17,25 @@ Precedence order:
 The main config file lives at:
 
 ```text
-<store>/config.toml
+./data/config/config.toml
 ```
 
 Examples:
 
-- default store: `~/.aascribe/config.toml`
-- explicit store: `./project-mem/config.toml`
+- default store `./data/memory`: `./data/config/config.toml`
+- explicit store `./project-mem`: `./config/config.toml`
 
-`<store>` is resolved using the same logic as the CLI:
+The memory store is still resolved using the same logic as the CLI:
 
 1. `--store <path>`
 2. `AASCRIBE_STORE`
-3. `~/.aascribe`
+3. `./data/memory` in the current working directory
+
+The config directory is a sibling `config/` directory beside the memory store directory.
+This keeps durable memory data separate from config and `.env` secret files.
+
+`aascribe init` creates a default `config.toml` template when the config file does not already exist.
+It preserves an existing config, including when `--force` is used.
 
 ## Why Secrets Use Environment Variables
 
@@ -77,34 +83,16 @@ default_depth = 3
 ### Default Store Setup
 
 ```bash
-mkdir -p ~/.aascribe
-
-cat > ~/.aascribe/config.toml <<'EOF'
-[llm]
-provider = "gemini"
-model = "gemini-2.5-flash"
-api_key_env = "GEMINI_API_KEY"
-timeout_seconds = 30
-EOF
-
+aascribe init
 export GEMINI_API_KEY="your-real-key"
 
-go run ./cmd/aascribe -- describe ./README.md
+aascribe describe ./README.md
 ```
 
 ### Skill-Friendly Explicit Store
 
 ```bash
-mkdir -p ./project-mem
-
-cat > ./project-mem/config.toml <<'EOF'
-[llm]
-provider = "gemini"
-model = "gemini-2.5-flash"
-api_key_env = "GEMINI_API_KEY"
-timeout_seconds = 30
-EOF
-
+aascribe init --store ./project-mem
 export GEMINI_API_KEY="your-real-key"
 
 ./bin/aascribe --store ./project-mem describe ./main.go
@@ -145,11 +133,11 @@ export AASCRIBE_LLM_TIMEOUT_SECONDS="45"
 
 ### `CONFIG_NOT_FOUND`
 
-`aascribe` could not find `<store>/config.toml`.
+`aascribe` could not find the resolved `config.toml`.
 
 Fix:
 
-- create the config file in the resolved store
+- run `aascribe init` to create the default config template
 - or pass the correct `--store` path
 
 ### `INVALID_CONFIG`

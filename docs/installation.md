@@ -53,6 +53,20 @@ The default store path is:
 
 `AASCRIBE_STORE` or `--store <path>` can override that default.
 
+`init` also creates a default `config.toml` template at:
+
+```text
+./data/config/config.toml
+```
+
+Before running LLM-backed commands such as `chat`, `summarize`, or summarized `index` runs that use Gemini, set the configured secret in the shell or in `./data/config/.env`:
+
+```bash
+export GEMINI_API_KEY="your-real-key"
+# or:
+echo 'GEMINI_API_KEY=your-real-key' >> ./data/config/.env
+```
+
 ## Skill Layout
 
 The repository includes an agent-facing indexing skill at:
@@ -172,6 +186,7 @@ Then use the skill's normal workflow from the target repository:
 
 ```bash
 AASCRIBE=./skills/indexing-folder/bin/aascribe
+"$AASCRIBE" init
 "$AASCRIBE" index . --depth 2 --no-summary
 "$AASCRIBE" map .
 ```
@@ -180,6 +195,7 @@ On Windows PowerShell:
 
 ```powershell
 $AASCRIBE = ".\skills\indexing-folder\bin\aascribe.exe"
+& $AASCRIBE init
 & $AASCRIBE index . --depth 2 --no-summary
 & $AASCRIBE map .
 ```

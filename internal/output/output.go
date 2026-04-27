@@ -374,22 +374,22 @@ func errorGuidance(err error, appErr *apperr.Error, command, store string) (stri
 			"aascribe --store ./project-mem list",
 		}
 	case "CONFIG_NOT_FOUND":
-		return "Create <store>/config.toml with an [llm] section before calling the LLM-backed command.", []string{
+		return "Run `aascribe init` to create data/config/config.toml before calling the LLM-backed command.", []string{
 			"aascribe init",
-			"cat ./data/memory/config.toml",
+			"cat ./data/config/config.toml",
 			"aascribe chat \"Say hello\"",
 		}
 	case "INVALID_CONFIG":
-		return "Check the [llm] section in <store>/config.toml and fix the missing or unsupported fields.", []string{
-			"cat ./data/memory/config.toml",
+		return "Check the [llm] section in data/config/config.toml and fix the missing or unsupported fields.", []string{
+			"cat ./data/config/config.toml",
 			"aascribe chat --help",
 			"aascribe --help",
 		}
 	case "MISSING_SECRET":
-		return "Set the API key environment variable configured in <store>/config.toml, or place it in .env in the current working directory or in <store>/.env.", []string{
+		return "Set the API key environment variable configured in data/config/config.toml, or place it in .env in the current working directory or in data/config/.env.", []string{
 			"export GEMINI_API_KEY=your-real-key",
 			"echo 'GEMINI_API_KEY=your-real-key' >> .env",
-			"echo 'GEMINI_API_KEY=your-real-key' >> ./data/memory/.env",
+			"echo 'GEMINI_API_KEY=your-real-key' >> ./data/config/.env",
 			"aascribe chat \"Say hello\"",
 			"aascribe --store ./project-mem chat \"Say hello\"",
 		}

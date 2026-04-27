@@ -148,6 +148,26 @@ timeout_seconds = 30
 	}
 }
 
+func TestResolveLoadsSecretFromDotEnvBesideConfig(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "memory")
+	writeConfig(t, storePath, `
+[llm]
+provider = "gemini"
+model = "gemini-2.5-flash"
+api_key_env = "GEMINI_API_KEY"
+timeout_seconds = 30
+`)
+	writeEnvFile(t, filepath.Join(ConfigDir(storePath), ".env"), "GEMINI_API_KEY=config-dir-secret\n")
+
+	resolved, err := Resolve(storePath, ResolveOptions{}, lookupEnv(map[string]string{}))
+	if err != nil {
+		t.Fatalf("expected resolve success, got %v", err)
+	}
+	if resolved.LLM.APIKey != "config-dir-secret" {
+		t.Fatalf("expected config dir dotenv secret, got %q", resolved.LLM.APIKey)
+	}
+}
+
 func TestResolveEnvOverridesDotEnv(t *testing.T) {
 	storePath := t.TempDir()
 	writeConfig(t, storePath, `
@@ -259,8 +279,8 @@ format = "json"
 }
 
 func TestConfigPath(t *testing.T) {
-	storePath := "/tmp/aascribe"
-	expected := filepath.Join(storePath, "config.toml")
+	storePath := filepath.Join("/tmp", "aascribe", "memory")
+	expected := filepath.Join("/tmp", "aascribe", "config", "config.toml")
 	if got := ConfigPath(storePath); got != expected {
 		t.Fatalf("expected %q, got %q", expected, got)
 	}
@@ -268,8 +288,8 @@ func TestConfigPath(t *testing.T) {
 
 func writeConfig(t *testing.T, storePath, body string) {
 	t.Helper()
-	if err := os.MkdirAll(storePath, 0o755); err != nil {
-		t.Fatalf("mkdir failed: %v", err)
+	if err := os.MkdirAll(ConfigDir(storePath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir failed: %v", err)
 	}
 	if err := os.WriteFile(ConfigPath(storePath), []byte(body), 0o644); err != nil {
 		t.Fatalf("write config failed: %v", err)

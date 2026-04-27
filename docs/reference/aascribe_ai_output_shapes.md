@@ -307,6 +307,7 @@ These examples are illustrative. They do not claim the current implementation al
 | `logs export --output <path>` | `LogExportResult` | Export the active log file to a target path. |
 | `logs clear --force` | `LogClearResult` | Clear the active log file. |
 | `index <path>` | `PathIndexTree` | Indexed directory tree and file summaries. |
+| `search <query> [path]` | `SearchResult` | Exact text search results with line-level matches. |
 | `describe <file>` | `FileDescription` | Single file summary payload. |
 | `remember` | `RememberResult` | Newly stored short-term memory metadata. |
 | `consolidate` | `ConsolidationResult` | Long-term memories created and source-entry counts. |

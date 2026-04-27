@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/SearchResult",
+  "title": "SearchResult",
+  "description": "Exact text search result with line-level matches.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Search query used by the selected engine."
+    },
+    "root": {
+      "type": "string",
+      "description": "Absolute search root."
+    },
+    "engine": {
+      "type": "string",
+      "enum": ["rg", "git-grep", "grep", "builtin"],
+      "description": "Search engine that produced the result."
+    },
+    "match_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "truncated": {
+      "type": "boolean",
+      "description": "True when --max-count limited returned matches."
+    },
+    "matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path relative to the search root when possible."
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "text": {
+            "type": "string",
+            "description": "Matched line text."
+          }
+        },
+        "required": ["path", "line", "text"]
+      }
+    }
+  },
+  "required": ["query", "root", "engine", "match_count", "truncated", "matches"],
+  "examples": [
+    {
+      "query": "zprofile",
+      "root": "/abs/path/to/project",
+      "engine": "rg",
+      "match_count": 1,
+      "truncated": false,
+      "matches": [
+        {
+          "path": "docs/setup.md",
+          "line": 25,
+          "column": 18,
+          "text": "Add Homebrew to ~/.zprofile."
+        }
+      ]
+    }
+  ]
+}

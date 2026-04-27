@@ -19,6 +19,7 @@ import (
 	"github.com/austinjan/aascribe/internal/logging"
 	"github.com/austinjan/aascribe/internal/operation"
 	"github.com/austinjan/aascribe/internal/output"
+	"github.com/austinjan/aascribe/internal/search"
 	"github.com/austinjan/aascribe/internal/store"
 	"github.com/austinjan/aascribe/pkg/llmoutput"
 )
@@ -75,6 +76,8 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 		return runIndexMap(cmd)
 	case cli.MapCommand:
 		return runMap(cmd)
+	case cli.SearchCommand:
+		return runSearch(cmd)
 	case cli.DescribeCommand:
 		return runDescribe(storePath, cmd)
 	case cli.RememberCommand:
@@ -377,6 +380,25 @@ func runMap(cmd cli.MapCommand) (*output.CommandResult, error) {
 	}, nil
 }
 
+func runSearch(cmd cli.SearchCommand) (*output.CommandResult, error) {
+	result, err := search.Run(search.Options{
+		Query:        cmd.Query,
+		Root:         cmd.Path,
+		Engine:       cmd.Engine,
+		IgnoreCase:   cmd.IgnoreCase,
+		FixedStrings: cmd.FixedStrings,
+		Glob:         cmd.Glob,
+		MaxCount:     cmd.MaxCount,
+	})
+	if err != nil {
+		return nil, apperr.IOError("Search failed: %v.", err)
+	}
+	return &output.CommandResult{
+		Data: result,
+		Text: renderSearchText(result),
+	}, nil
+}
+
 func runDescribe(storePath string, cmd cli.DescribeCommand) (*output.CommandResult, error) {
 	result, err := describeWithFallback(storePath, cmd)
 	if err != nil {
@@ -466,7 +488,12 @@ func runInit(storePath string, force bool) (*output.CommandResult, error) {
 	if outcome.Reinitialized {
 		text = fmt.Sprintf("Reinitialized aascribe store at %s", storePath)
 	}
-	text += "\nnext: aascribe logs path"
+	text += "\nconfig: " + outcome.ConfigPath
+	if outcome.ConfigCreated {
+		text += "\nnext: set GEMINI_API_KEY before LLM-backed commands, or edit " + outcome.ConfigPath
+	} else {
+		text += "\nnext: aascribe logs path"
+	}
 
 	return &output.CommandResult{
 		Data: map[string]any{
@@ -474,6 +501,8 @@ func runInit(storePath string, force bool) (*output.CommandResult, error) {
 			"created":        outcome.Created,
 			"reinitialized":  outcome.Reinitialized,
 			"layout_version": store.LayoutVersion(),
+			"config_path":    outcome.ConfigPath,
+			"config_created": outcome.ConfigCreated,
 		},
 		Text: text,
 	}, nil
@@ -602,6 +631,30 @@ func renderMapText(result *index.PathIndexMap) string {
 		}
 	}
 	walk(result.Map, 0)
+	return strings.Join(lines, "\n")
+}
+
+func renderSearchText(result *search.Result) string {
+	lines := []string{
+		fmt.Sprintf("search: %q", result.Query),
+		"engine: " + result.Engine,
+		fmt.Sprintf("matches: %d", result.MatchCnt),
+	}
+	for _, match := range result.Matches {
+		location := fmt.Sprintf("%s:%d", match.Path, match.Line)
+		if match.Column > 0 {
+			location = fmt.Sprintf("%s:%d:%d", match.Path, match.Line, match.Column)
+		}
+		lines = append(lines, location+": "+match.Text)
+	}
+	if result.Truncated {
+		lines = append(lines, "truncated: true")
+		lines = append(lines, "next: narrow the path, add --glob, or raise --max-count")
+	} else if result.MatchCnt == 0 {
+		lines = append(lines, "next: try --ignore-case, broaden the path, or use aascribe map for semantic routing")
+	} else {
+		lines = append(lines, "next: inspect the matched files before making final claims")
+	}
 	return strings.Join(lines, "\n")
 }
 

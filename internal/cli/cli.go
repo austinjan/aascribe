@@ -145,6 +145,18 @@ type MapCommand struct {
 
 func (c MapCommand) Name() string { return "map" }
 
+type SearchCommand struct {
+	Query        string
+	Path         string
+	Engine       string
+	IgnoreCase   bool
+	FixedStrings bool
+	Glob         []string
+	MaxCount     int
+}
+
+func (c SearchCommand) Name() string { return "search" }
+
 type OperationListCommand struct{}
 
 func (c OperationListCommand) Name() string { return "operation" }
@@ -329,6 +341,7 @@ Commands:
   output       Browse stored oversized outputs for LLM-safe continuation
   operation    Inspect persisted long-running operation state
   index        Index a folder for later retrieval and summarization
+  search       Exact text search with line-level matches
   describe     Summarize one file with optional length and focus controls
   remember     Write a short-term memory item
   consolidate  Turn short-term memories into longer-term memory entries
@@ -369,6 +382,7 @@ Current Implementation Status:
     operation cancel
     index
     index clean
+    search
     describe
     chat
     summarize
@@ -784,6 +798,26 @@ Notes:
   This command does not write metadata.
   Folder state is local-only: child folder changes do not make the parent folder changed unless the parent's own direct files or metadata changed.
 `)
+	case "search":
+		return strings.TrimSpace(`
+aascribe search - exact text search with line-level matches
+
+Purpose:
+  Confirm exact mentions after semantic routing. This command prefers system search tools in this order: rg, git grep, grep, then a built-in fallback.
+
+Usage:
+  aascribe search <query> [path] [--engine auto|rg|git-grep|grep|builtin] [--ignore-case] [--fixed-strings] [--glob <pattern>] [--max-count <n>]
+
+Examples:
+  aascribe search "zprofile" .
+  aascribe search "GEMINI_API_KEY" ./internal --fixed-strings
+  aascribe search "func .*Search" . --glob "*.go"
+  aascribe search "zsh" ./docs --engine builtin --ignore-case
+
+Notes:
+  Use aascribe map for semantic routing.
+  Use aascribe search for exact confirmation, line numbers, and every occurrence within the selected scope.
+`)
 	case "describe":
 		return strings.TrimSpace(`
 aascribe describe - summarize one file
@@ -878,8 +912,8 @@ Examples:
   aascribe --store ./project-mem chat "What model are you using?"
 
 Next Steps:
-  Check <store>/config.toml if config loading fails
-  Confirm the API key env var configured in <store>/config.toml is set
+  Check data/config/config.toml if config loading fails
+  Confirm the API key env var configured in data/config/config.toml is set
   Use aascribe describe --help for the next intended consumer of the LLM layer
 `)
 	case "summarize":
@@ -900,7 +934,7 @@ Examples:
 
 Next Steps:
   Use aascribe chat to debug direct prompts separately
-  Check <store>/config.toml if config loading fails
+  Check data/config/config.toml if config loading fails
   Tune the prompt here before wiring describe/index onto the same summary core
 `)
 	case "list":
@@ -1103,6 +1137,8 @@ func parseSubcommand(name string, args []string) (Command, error) {
 		return parseIndex(args)
 	case "map":
 		return parseMap(args)
+	case "search":
+		return parseSearch(args)
 	case "describe":
 		return parseDescribe(args)
 	case "remember":
@@ -1436,6 +1472,39 @@ func parseMap(args []string) (Command, error) {
 		return nil, newParseError(ParseErrorMissingRequiredArg, "map", "path", "map requires exactly one path argument.")
 	}
 	cmd.Path = fs.Args()[0]
+	return cmd, nil
+}
+
+func parseSearch(args []string) (Command, error) {
+	fs := newFlagSet("search")
+	var cmd SearchCommand
+	cmd.Path = "."
+	cmd.Engine = "auto"
+	cmd.MaxCount = 100
+	var glob stringSlice
+	fs.StringVar(&cmd.Engine, "engine", "auto", "")
+	fs.BoolVar(&cmd.IgnoreCase, "ignore-case", false, "")
+	fs.BoolVar(&cmd.FixedStrings, "fixed-strings", false, "")
+	fs.Var(&glob, "glob", "")
+	fs.IntVar(&cmd.MaxCount, "max-count", 100, "")
+	if err := parseFlags(fs, args); err != nil {
+		return nil, err
+	}
+	positionals := fs.Args()
+	if len(positionals) < 1 || len(positionals) > 2 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "search", "query", "search requires a query and optional path.")
+	}
+	if !oneOf(cmd.Engine, "auto", "rg", "git-grep", "grep", "builtin") {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "search", "--engine", "Invalid value for --engine: %s.", cmd.Engine)
+	}
+	if cmd.MaxCount < 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "search", "--max-count", "Invalid value for --max-count: %d.", cmd.MaxCount)
+	}
+	cmd.Query = positionals[0]
+	if len(positionals) == 2 {
+		cmd.Path = positionals[1]
+	}
+	cmd.Glob = glob
 	return cmd, nil
 }
 

@@ -18,6 +18,7 @@ Complete command and flag reference for `aascribe`.
   - [operation](#operation)
   - [index](#index)
   - [map](#map)
+  - [search](#search)
   - [describe](#describe)
   - [remember](#remember)
   - [consolidate](#consolidate)
@@ -105,6 +106,8 @@ On error:
 ### `init`
 
 Create a new store. Sets up a filesystem-first directory layout for short-term memory, long-term memory, index data, cache data, output transport data, and layout metadata.
+Also creates a safe default `config.toml` template in the sibling `data/config/` directory when one does not already exist.
+The template stores the API key environment variable name, not the secret itself.
 
 ```
 aascribe init [--store <path>] [--force]
@@ -143,7 +146,9 @@ OutputShape: StoreInitResult
     "store": "/path/to/project/data/memory",
     "created": true,
     "reinitialized": false,
-    "layout_version": "bootstrap-v1"
+    "layout_version": "bootstrap-v1",
+    "config_path": "/path/to/project/data/config/config.toml",
+    "config_created": true
   },
   "meta": {
     "command": "init",
@@ -450,6 +455,65 @@ OutputShape: PathIndexMap
     summary: Contains 4 files and 2 subdirectories.
     README.md - fixture tree for recursive indexing tests
     notes.conf - localhost:8080 config
+```
+
+---
+
+### `search`
+
+Run exact text search and return line-level matches. This is the confirmation step after `map` routing.
+
+```
+aascribe search <query> [path] [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--engine auto\|rg\|git-grep\|grep\|builtin` | `auto` | Search engine. `auto` tries `rg`, `git grep`, `grep`, then built-in Go search |
+| `--ignore-case` | off | Case-insensitive matching |
+| `--fixed-strings` | off | Treat query as literal text instead of a regular expression |
+| `--glob <pattern>` | — | Include matching files. Repeatable |
+| `--max-count <N>` | `100` | Maximum matches to return. `0` returns no matches, useful only for engine checks |
+
+Behavior notes:
+
+- `search` is for exact confirmation: line numbers, snippets, and every occurrence within the chosen scope.
+- `search` is not semantic. If you do not know the keyword, use `map` first to route to likely files or folders.
+- `auto` prefers system tools instead of reimplementing them: `rg`, then `git grep`, then `grep`, then a built-in fallback.
+- `--format json` returns a stable `SearchResult` payload for agents.
+
+**Example**
+
+```bash
+aascribe search "zprofile" .
+aascribe search "GEMINI_API_KEY" ./internal --fixed-strings
+aascribe search "func .*Search" . --glob "*.go"
+aascribe search "zsh" ./docs --engine builtin --ignore-case
+```
+
+OutputShape: SearchResult
+
+**JSON Output**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "query": "zprofile",
+    "root": "/abs/path/to/project",
+    "engine": "rg",
+    "match_count": 1,
+    "truncated": false,
+    "matches": [
+      {
+        "path": "docs/setup.md",
+        "line": 25,
+        "column": 18,
+        "text": "Add Homebrew to ~/.zprofile."
+      }
+    ]
+  }
+}
 ```
 
 ---

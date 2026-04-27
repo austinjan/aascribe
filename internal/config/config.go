@@ -75,7 +75,14 @@ type ResolvedIndex struct {
 type LookupEnvFunc func(string) (string, bool)
 
 func ConfigPath(storePath string) string {
-	return filepath.Join(storePath, "config.toml")
+	return filepath.Join(ConfigDir(storePath), "config.toml")
+}
+
+func ConfigDir(storePath string) string {
+	if storePath == "" {
+		return filepath.Join("data", "config")
+	}
+	return filepath.Join(filepath.Dir(storePath), "config")
 }
 
 func Load(storePath string) (*File, error) {
@@ -247,7 +254,7 @@ func loadDotEnvValues(storePath string) map[string]string {
 		paths = append(paths, filepath.Join(cwd, ".env"))
 	}
 	if storePath != "" {
-		paths = append(paths, filepath.Join(storePath, ".env"))
+		paths = append(paths, filepath.Join(ConfigDir(storePath), ".env"))
 	}
 
 	for _, path := range paths {

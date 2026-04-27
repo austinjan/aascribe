@@ -21,15 +21,25 @@
     "layout_version": {
       "type": "string",
       "description": "Bootstrap store layout version identifier."
+    },
+    "config_path": {
+      "type": "string",
+      "description": "Path to the config.toml file in the sibling config directory."
+    },
+    "config_created": {
+      "type": "boolean",
+      "description": "True when init created the default config.toml template."
     }
   },
-  "required": ["store", "created", "reinitialized"],
+  "required": ["store", "created", "reinitialized", "config_path", "config_created"],
   "examples": [
     {
-      "store": "/Users/you/.aascribe",
+      "store": "/path/to/project/data/memory",
       "created": true,
       "reinitialized": false,
-      "layout_version": "bootstrap-v1"
+      "layout_version": "bootstrap-v1",
+      "config_path": "/path/to/project/data/config/config.toml",
+      "config_created": true
     }
   ]
 }
