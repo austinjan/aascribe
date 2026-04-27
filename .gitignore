@@ -34,3 +34,6 @@ Thumbs.db
 # Environment files
 .env
 .env.*
+.tmp/
+.aascribe_index*
+/internal/app/data/

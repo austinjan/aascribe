@@ -1,6 +1,7 @@
 # aascribe Usage
 
 Related docs:
+- [installation.md](installation.md)
 - [reference/aascribe_ai_output_shapes.md](reference/aascribe_ai_output_shapes.md)
 - [shapes/README.md](shapes/README.md)
 - [logging.md](logging.md)
@@ -34,7 +35,7 @@ Available on every subcommand:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--store <path>` | `~/.aascribe` or `$AASCRIBE_STORE` | Path to the memory store root |
+| `--store <path>` | `$AASCRIBE_STORE` or `./data/memory` | Path to the memory store root |
 | `--format json\|text` | `text` | Output format. `text` is the compact default for LLM reading; `json` is for machine parsing |
 | `--quiet`, `-q` | off | Suppress all logging; only emit the result |
 | `--verbose`, `-v` | off | Emit debug logs to stderr |
@@ -67,7 +68,7 @@ When you explicitly request `--format json`, every JSON response uses this shape
   "meta": {
     "command": "recall",
     "duration_ms": 42,
-    "store": "/Users/you/.aascribe"
+    "store": "/path/to/project/data/memory"
   }
 }
 ```
@@ -79,7 +80,7 @@ On error:
   "ok": false,
   "error": {
     "code": "STORE_NOT_FOUND",
-    "message": "No store at /Users/you/.aascribe. Run `aascribe init`."
+    "message": "No store at /path/to/project/data/memory. Run `aascribe init`."
   },
   "meta": { ... }
 }
@@ -111,7 +112,7 @@ aascribe init [--store <path>] [--force]
 
 | Flag | Description |
 |---|---|
-| `--store <path>` | Where to create the store (default: `~/.aascribe`) |
+| `--store <path>` | Where to create the store (default: `./data/memory` in the current working directory, or `$AASCRIBE_STORE` when set) |
 | `--force` | Reinitialize even if a store already exists (destructive) |
 
 **Example**
@@ -121,7 +122,7 @@ aascribe init
 aascribe init --store ./project-mem
 ```
 
-**OutputShape:** `StoreInitResult`
+OutputShape: StoreInitResult
 
 **Bootstrap-managed layout**
 
@@ -139,7 +140,7 @@ aascribe init --store ./project-mem
 {
   "ok": true,
   "data": {
-    "store": "/Users/you/.aascribe",
+    "store": "/path/to/project/data/memory",
     "created": true,
     "reinitialized": false,
     "layout_version": "bootstrap-v1"
@@ -147,7 +148,7 @@ aascribe init --store ./project-mem
   "meta": {
     "command": "init",
     "duration_ms": 4,
-    "store": "/Users/you/.aascribe"
+    "store": "/path/to/project/data/memory"
   }
 }
 ```
@@ -179,7 +180,7 @@ aascribe --store ./project-mem logs export --output ./aascribe-debug.log
 aascribe --store ./project-mem logs clear --force
 ```
 
-**OutputShape:** `LogPathResult` for `logs path`
+OutputShape: LogPathResult (logs path)
 
 Example `logs path` output:
 
@@ -197,7 +198,7 @@ Example `logs path` output:
 }
 ```
 
-**OutputShape:** `LogExportResult` for `logs export`
+OutputShape: LogExportResult (logs export)
 
 Example `logs export` output:
 
@@ -216,7 +217,7 @@ Example `logs export` output:
 }
 ```
 
-**OutputShape:** `LogClearResult` for `logs clear`
+OutputShape: LogClearResult (logs clear)
 
 Example `logs clear` output:
 
@@ -290,14 +291,12 @@ aascribe operation clean --dry-run
 aascribe operation clean --force
 ```
 
-Output shapes:
-
-- `operation list`: `OperationList`
-- `operation status`: `OperationStatus`
-- `operation events`: `OperationEventList`
-- `operation result`: `OperationResult`
-- `operation cancel`: `OperationCancelResult`
-- `operation clean`: `OperationCleanResult`
+OutputShape: OperationList (operation list)
+OutputShape: OperationStatus (operation status)
+OutputShape: OperationEventList (operation events)
+OutputShape: OperationResult (operation result)
+OutputShape: OperationCancelResult (operation cancel)
+OutputShape: OperationCleanResult (operation clean)
 
 ---
 
@@ -348,9 +347,9 @@ aascribe index dirty ./src              # mark existing metadata stale
 aascribe index eval ./src               # preview changed vs unchanged work
 ```
 
-**OutputShape:** `PathIndexTree` for synchronous `index`
+OutputShape: PathIndexTree (synchronous index)
 
-**OutputShape:** `OperationAccepted` for `index --async`
+OutputShape: OperationAccepted (index --async)
 
 **Output**
 
@@ -408,7 +407,7 @@ aascribe --format text map ./tests
 aascribe --format json map ./docs
 ```
 
-**OutputShape:** `PathIndexMap`
+OutputShape: PathIndexMap
 
 **JSON Output**
 
@@ -573,7 +572,7 @@ aascribe describe ./src/poll.rs
 aascribe describe --length long --focus "FOCAS retry logic" ./src/poll.rs
 ```
 
-**OutputShape:** `FileDescription`
+OutputShape: FileDescription
 
 ---
 
@@ -607,7 +606,7 @@ aascribe remember --source ./src/poll.rs --tag refactor \
   "poll loop should be split into producer/consumer"
 ```
 
-**OutputShape:** `RememberResult`
+OutputShape: RememberResult
 
 **Output**
 
@@ -651,7 +650,7 @@ aascribe consolidate --session sess_20260423_0915
 aascribe consolidate --tag nimbl --topic "FOCAS protocol handling"
 ```
 
-**OutputShape:** `ConsolidationResult`
+OutputShape: ConsolidationResult
 
 **Output**
 
@@ -702,7 +701,7 @@ aascribe recall "deployment issues" --tier long --limit 5
 aascribe recall "bug" --tag nimbl --since 7d --include-source
 ```
 
-**OutputShape:** `MemoryRecallResult`
+OutputShape: MemoryRecallResult
 
 **Output**
 
@@ -745,7 +744,7 @@ aascribe list [flags]
 | `--limit <N>` | `50` | Maximum rows |
 | `--order asc\|desc` | `desc` | Sort by creation time |
 
-**OutputShape:** `MemoryEntryList`
+OutputShape: MemoryEntryList
 
 ---
 
@@ -761,7 +760,7 @@ aascribe show <id>
 |---|---|
 | `<id>` | Memory id (positional, required). Accepts `stm_...` or `ltm_...` |
 
-**OutputShape:** `MemoryEntryDetail`
+OutputShape: MemoryEntryDetail
 
 ---
 
@@ -778,7 +777,7 @@ aascribe forget <id> [--force]
 | `<id>` | Memory id to delete |
 | `--force` | Skip confirmation (required in non-interactive mode) |
 
-**OutputShape:** `ForgetResult`
+OutputShape: ForgetResult
 
 ---
 

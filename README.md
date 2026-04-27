@@ -5,6 +5,7 @@ Early-stage Go CLI for project memory, recall, and indexing.
 ## Docs
 
 - [Quick Start](./quick_start.md)
+- [Installation](./docs/installation.md)
 - [Configuration](./docs/configuration.md)
 - [Logging](./docs/logging.md)
 - [Usage Guide](./docs/USAGE.md)

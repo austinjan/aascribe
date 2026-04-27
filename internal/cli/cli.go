@@ -1014,15 +1014,17 @@ func classifyHelpTopic(tokens []string) string {
 }
 
 func parseGlobals(args []string, parsed *Parsed) ([]string, error) {
-	i := 0
-	for i < len(args) {
+	rest := make([]string, 0, len(args))
+	for i := 0; i < len(args); {
 		arg := args[i]
 		if arg == "--" {
-			i++
-			continue
+			rest = append(rest, args[i+1:]...)
+			break
 		}
 		if !strings.HasPrefix(arg, "-") {
-			return args[i:], nil
+			rest = append(rest, arg)
+			i++
+			continue
 		}
 
 		switch {
@@ -1065,11 +1067,15 @@ func parseGlobals(args []string, parsed *Parsed) ([]string, error) {
 			parsed.Version = true
 			i++
 		default:
-			return nil, newUnknownGlobalFlagError(arg)
+			if len(rest) == 0 {
+				return nil, newUnknownGlobalFlagError(arg)
+			}
+			rest = append(rest, arg)
+			i++
 		}
 	}
 
-	return nil, nil
+	return rest, nil
 }
 
 func parseFormat(value string) (Format, error) {
@@ -1135,7 +1141,7 @@ func parseLogs(args []string) (Command, error) {
 		fs := newFlagSet("logs export")
 		var output string
 		fs.StringVar(&output, "output", "", "")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := parseFlags(fs, args[1:]); err != nil {
 			return nil, err
 		}
 		if output == "" {
@@ -1149,7 +1155,7 @@ func parseLogs(args []string) (Command, error) {
 		fs := newFlagSet("logs clear")
 		var force bool
 		fs.BoolVar(&force, "force", false, "")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := parseFlags(fs, args[1:]); err != nil {
 			return nil, err
 		}
 		if len(fs.Args()) != 0 {
@@ -1178,7 +1184,7 @@ func parseOutput(args []string) (Command, error) {
 		fs.IntVar(&lines, "lines", 300, "")
 		fs.IntVar(&width, "width", 120, "")
 		fs.StringVar(&prefix, "prefix", "line", "")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := parseFlags(fs, args[1:]); err != nil {
 			return nil, err
 		}
 		if len(fs.Args()) != 0 {
@@ -1213,7 +1219,7 @@ func parseOutput(args []string) (Command, error) {
 		fs := newFlagSet("output head")
 		var lines int
 		fs.IntVar(&lines, "lines", 100, "")
-		if err := fs.Parse(args[2:]); err != nil {
+		if err := parseFlags(fs, args[2:]); err != nil {
 			return nil, err
 		}
 		if len(fs.Args()) != 0 {
@@ -1227,7 +1233,7 @@ func parseOutput(args []string) (Command, error) {
 		fs := newFlagSet("output tail")
 		var lines int
 		fs.IntVar(&lines, "lines", 100, "")
-		if err := fs.Parse(args[2:]); err != nil {
+		if err := parseFlags(fs, args[2:]); err != nil {
 			return nil, err
 		}
 		if len(fs.Args()) != 0 {
@@ -1243,7 +1249,7 @@ func parseOutput(args []string) (Command, error) {
 		var limit int
 		fs.IntVar(&offset, "offset", -1, "")
 		fs.IntVar(&limit, "limit", 0, "")
-		if err := fs.Parse(args[2:]); err != nil {
+		if err := parseFlags(fs, args[2:]); err != nil {
 			return nil, err
 		}
 		if len(fs.Args()) != 0 {
@@ -1265,7 +1271,7 @@ func parseInit(args []string) (Command, error) {
 	fs := newFlagSet("init")
 	var force bool
 	fs.BoolVar(&force, "force", false, "")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 0 {
@@ -1319,7 +1325,7 @@ func parseOperationClean(args []string) (Command, error) {
 	var cmd OperationCleanCommand
 	fs.BoolVar(&cmd.DryRun, "dry-run", false, "")
 	fs.BoolVar(&cmd.Force, "force", false, "")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 0 {
@@ -1359,7 +1365,7 @@ func parseIndex(args []string) (Command, error) {
 	fs.BoolVar(&cmd.Refresh, "refresh", false, "")
 	fs.BoolVar(&cmd.NoSummary, "no-summary", false, "")
 	fs.Int64Var(&cmd.MaxFileSize, "max-file-size", 1_048_576, "")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
@@ -1397,7 +1403,7 @@ func parseIndexMap(args []string) (Command, error) {
 func parseIndexDirty(args []string) (Command, error) {
 	fs := newFlagSet("index dirty")
 	var cmd IndexDirtyCommand
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
@@ -1410,7 +1416,7 @@ func parseIndexDirty(args []string) (Command, error) {
 func parseIndexEval(args []string) (Command, error) {
 	fs := newFlagSet("index eval")
 	var cmd IndexEvalCommand
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
@@ -1423,7 +1429,7 @@ func parseIndexEval(args []string) (Command, error) {
 func parseMap(args []string) (Command, error) {
 	fs := newFlagSet("index map")
 	var cmd MapCommand
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
@@ -1440,14 +1446,14 @@ func parseIndexClean(args []string) (Command, error) {
 	fs.BoolVar(&cmd.Force, "force", false, "")
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd.Path = args[0]
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := parseFlags(fs, args[1:]); err != nil {
 			return nil, err
 		}
 		if len(fs.Args()) != 0 {
 			return nil, newParseError(ParseErrorMissingRequiredArg, "index clean", "path", "index clean requires exactly one path argument.")
 		}
 	} else {
-		if err := fs.Parse(args); err != nil {
+		if err := parseFlags(fs, args); err != nil {
 			return nil, err
 		}
 		if len(fs.Args()) != 1 {
@@ -1468,7 +1474,7 @@ func parseDescribe(args []string) (Command, error) {
 	fs.BoolVar(&cmd.Refresh, "refresh", false, "")
 	fs.StringVar(&cmd.Length, "length", "medium", "")
 	fs.StringVar(&cmd.Focus, "focus", "", "")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
@@ -1492,7 +1498,7 @@ func parseRemember(args []string) (Command, error) {
 	fs.StringVar(&cmd.TTL, "ttl", "", "")
 	fs.IntVar(&cmd.Importance, "importance", 3, "")
 	fs.BoolVar(&cmd.Stdin, "stdin", false, "")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) > 1 {
@@ -1521,7 +1527,7 @@ func parseConsolidate(args []string) (Command, error) {
 	fs.BoolVar(&cmd.DryRun, "dry-run", false, "")
 	fs.BoolVar(&cmd.KeepShort, "keep-short", false, "")
 	fs.IntVar(&cmd.MinItems, "min-items", 3, "")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 0 {
@@ -1545,7 +1551,7 @@ func parseRecall(args []string) (Command, error) {
 	fs.StringVar(&cmd.Until, "until", "", "")
 	fs.Float64Var(&cmd.MinScore, "min-score", 0.3, "")
 	fs.BoolVar(&cmd.IncludeSource, "include-source", false, "")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
@@ -1561,7 +1567,7 @@ func parseRecall(args []string) (Command, error) {
 
 func parseChat(args []string) (Command, error) {
 	fs := newFlagSet("chat")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
@@ -1572,7 +1578,7 @@ func parseChat(args []string) (Command, error) {
 
 func parseSummarize(args []string) (Command, error) {
 	fs := newFlagSet("summarize")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
@@ -1595,7 +1601,7 @@ func parseList(args []string) (Command, error) {
 	fs.StringVar(&cmd.Until, "until", "", "")
 	fs.IntVar(&cmd.Limit, "limit", 50, "")
 	fs.StringVar(&cmd.Order, "order", "desc", "")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 0 {
@@ -1613,7 +1619,7 @@ func parseList(args []string) (Command, error) {
 
 func parseShow(args []string) (Command, error) {
 	fs := newFlagSet("show")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
@@ -1626,7 +1632,7 @@ func parseForget(args []string) (Command, error) {
 	fs := newFlagSet("forget")
 	var cmd ForgetCommand
 	fs.BoolVar(&cmd.Force, "force", false, "")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return nil, err
 	}
 	if len(fs.Args()) != 1 {
@@ -1640,6 +1646,51 @@ func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	return fs
+}
+
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	flags := make([]string, 0, len(args))
+	positionals := make([]string, 0, len(args))
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positionals = append(positionals, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positionals = append(positionals, arg)
+			continue
+		}
+
+		name, hasInlineValue := flagName(arg)
+		flagDef := fs.Lookup(name)
+		flags = append(flags, arg)
+		if flagDef == nil || hasInlineValue || isBoolFlag(flagDef) {
+			continue
+		}
+		if i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+
+	ordered := append(flags, positionals...)
+	return fs.Parse(ordered)
+}
+
+func flagName(arg string) (string, bool) {
+	name := strings.TrimLeft(arg, "-")
+	valueIndex := strings.Index(name, "=")
+	if valueIndex < 0 {
+		return name, false
+	}
+	return name[:valueIndex], true
+}
+
+func isBoolFlag(flagDef *flag.Flag) bool {
+	_, ok := flagDef.Value.(interface{ IsBoolFlag() bool })
+	return ok
 }
 
 type stringSlice []string

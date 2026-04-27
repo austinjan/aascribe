@@ -28,6 +28,20 @@ func TestParseInitStoreAndForce(t *testing.T) {
 	}
 }
 
+func TestParseGlobalStoreAfterCommand(t *testing.T) {
+	parsed, err := cli.Parse([]string{"init", "--force", "--store", "/tmp/demo"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	if parsed.Store != "/tmp/demo" {
+		t.Fatalf("expected explicit store, got %q", parsed.Store)
+	}
+	cmd, ok := parsed.Command.(cli.InitCommand)
+	if !ok || !cmd.Force {
+		t.Fatalf("expected init command with force=true, got %#v", parsed.Command)
+	}
+}
+
 func TestParseDefaultFormatText(t *testing.T) {
 	parsed, err := cli.Parse([]string{"list"})
 	if err != nil {
@@ -175,6 +189,23 @@ func TestParseIndexConcurrency(t *testing.T) {
 	}
 	if cmd.Path != "./tests" || cmd.Concurrency != 6 {
 		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
+func TestParseIndexFlagsAfterPath(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "./tests", "--depth", "2", "--include", "*.go", "--include", "*.md", "--refresh"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.IndexCommand)
+	if !ok {
+		t.Fatalf("expected index command, got %#v", parsed.Command)
+	}
+	if cmd.Path != "./tests" || cmd.Depth != 2 || !cmd.Refresh {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+	if len(cmd.Include) != 2 || cmd.Include[0] != "*.go" || cmd.Include[1] != "*.md" {
+		t.Fatalf("unexpected include flags: %#v", cmd.Include)
 	}
 }
 
