@@ -273,6 +273,7 @@ Behavior notes:
 - `result.json` is written only when a final result is available. Small results may include `data`; oversized results store data through the managed `output` transport and return `output_id`.
 - `operation result` returns a typed error if the operation has not completed yet.
 - When `operation result` shows `output_id`, use `aascribe output show <output-id>` or `aascribe output slice <output-id> --offset 0 --limit 4000` to inspect the stored payload.
+- Operation-linked `output_id` payloads are not protected from normal output retention. If the referenced output has been pruned, `output show/slice/meta` returns the normal `OUTPUT_NOT_FOUND` guidance; the operation record itself is still valid historical state.
 - `operation cancel` is idempotent for already canceled operations and rejects operations that already succeeded or failed.
 - `operation clean` defaults to dry-run unless `--force` is provided. It never removes `pending` or `running` operations.
 - `operation clean` removes operation lifecycle directories only; managed `outputs/` payloads follow the output transport retention policy.

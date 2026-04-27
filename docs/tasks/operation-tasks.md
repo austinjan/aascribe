@@ -48,10 +48,10 @@ Done in the current repo:
 - oversized operation results are routed through the managed output transport
 - operation cleanup is explicit and user-managed through `operation clean`
 
-Still intentionally incomplete:
+Still intentionally limited:
 
 - async support is opt-in per command; `index` is the first supported command
-- operation-linked `output_id` payloads still follow the existing output transport retention policy; stronger linked-output retention protection is a future enhancement
+- operation-linked `output_id` payloads follow the existing output transport retention policy; if the referenced output is no longer retained, callers should treat it as an unavailable attachment and use the existing `OUTPUT_NOT_FOUND` guidance
 
 ## Scope And Sequencing
 
@@ -710,14 +710,14 @@ Concrete cases:
 
 - one oversized completed operation exposes `output_id`
 - `operation result` gives explicit next-step hints that match existing `output show/head/tail/slice`
-- output transport retention and operation lifecycle do not drift out of sync silently; durable retention coupling remains part of Phase 5
+- output transport retention remains independent from operation lifecycle; a retained operation may reference an output payload that has already aged out, and that is acceptable when surfaced as a clear missing-output error
 
 Completed outputs:
 
 - `operation.SaveResult` now serializes oversized `data` through the managed `outputs/` transport
 - oversized `result.json` records stay compact by omitting inline `data`, setting `truncated: true`, and storing `output_id`
 - small operation results still keep inline `data` in `result.json`
-- result payloads use existing output retention until operation-specific retention is implemented
+- result payloads use existing output retention; operation-specific retention protection is intentionally not part of this milestone
 - CLI smoke test confirmed a large async index result returns `output_id: out_000001` and can be read through `output slice`
 
 ### Task 4.2: Define operation-to-output hints
@@ -750,7 +750,7 @@ Status: completed.
 Concrete cases:
 
 - retention should not silently remove running operations
-- pruning should preserve store consistency when result/output references exist
+- pruning should preserve operation lifecycle state and clearly tolerate missing output attachments
 - agents should still be able to inspect recent failed operations after completion
 
 Completed outputs:
@@ -759,6 +759,7 @@ Completed outputs:
 - `pending` and `running` operations are always preserved
 - terminal operations are eligible for cleanup when they are `succeeded`, `failed`, or `canceled`
 - cleanup removes operation lifecycle directories only; referenced `output_id` payloads stay under the existing output transport retention policy
+- missing referenced outputs are reported through the normal `OUTPUT_NOT_FOUND` flow instead of being treated as operation corruption
 
 ### Task 5.2: Add cleanup command or policy hooks
 
@@ -925,4 +926,4 @@ Recommended delivery order:
 
 - should operation events be command-neutral only, or allow command-specific structured event payloads
 - should partial-success be its own operation state, or remain command-specific result detail
-- should operation-linked output payloads get retention protection beyond the current output transport policy
+- operation-linked output payloads do not get retention protection beyond the current output transport policy; missing referenced outputs are acceptable when the error is explicit
