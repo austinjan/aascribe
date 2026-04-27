@@ -18,12 +18,15 @@
       "format": "date-time"
     },
     "data": {
+      "description": "Inline final payload for small operation results. Omitted when output_id is present.",
       "type": ["object", "array", "string", "number", "boolean", "null"]
     },
     "output_id": {
+      "description": "Managed output id for oversized final payloads. Use output show/head/tail/slice to inspect it.",
       "type": "string"
     },
     "truncated": {
+      "description": "True when the final payload is stored through output_id instead of embedded inline.",
       "type": "boolean"
     },
     "error": {

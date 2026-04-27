@@ -44,12 +44,12 @@ Done in the current repo:
 - `index` already has enough internal stage boundaries to become the first real operation candidate
 - checked-in lifecycle shapes now exist in [../shapes](../shapes/README.md) for accepted, status, events, result, and list payloads
 - the first operation inspection command surface now exists: `list`, `status`, `events`, `result`, and `cancel`
+- `index --async` has been smoke-tested through the built CLI against a fixture tree
 
 Still intentionally incomplete:
 
-- `index --async` exists, but binary smoke testing is still pending
-- final operation results are stored directly in `result.json`; oversized result integration with managed output transport is not done yet
 - operation retention and cleanup policy are not done yet
+- operation result `output_id` references still use normal output retention; retention coupling is deferred to Phase 5
 - async support is opt-in per command; `index` is the first supported command
 
 ## Scope And Sequencing
@@ -645,7 +645,7 @@ Concrete cases:
 
 ### Task 3.3: Integrate `index` first
 
-Status: implemented; smoke testing pending.
+Status: completed.
 
 - run `index` through the shared operation lifecycle in long-running mode
 - report folder/file scan stages
@@ -666,6 +666,9 @@ Completed outputs:
 - operation status moves through pending/running/terminal states
 - final index result is persisted to `result.json`
 - cancellation is observed by the async worker through operation status polling and `context.Context`
+- CLI smoke test completed with `./dist/aascribe --store .tmp/operation-smoke-store index --async tests/index-fixtures`
+- `operation status`, `operation events`, and `operation result` returned readable persisted lifecycle/result data for the completed async index operation
+- terminal cancellation was smoke-tested by canceling a succeeded operation and receiving `OPERATION_ALREADY_TERMINAL`
 
 ### Task 3.4: Keep synchronous mode intact
 
@@ -690,7 +693,7 @@ Completed outputs:
 
 ### Task 4.1: Connect final results to managed output
 
-Status: not started.
+Status: completed.
 
 - when final operation result is oversized, store it through the existing output transport
 - keep the operation result small and explicit
@@ -699,11 +702,19 @@ Concrete cases:
 
 - one oversized completed operation exposes `output_id`
 - `operation result` gives explicit next-step hints that match existing `output show/head/tail/slice`
-- output transport retention and operation lifecycle do not drift out of sync silently
+- output transport retention and operation lifecycle do not drift out of sync silently; durable retention coupling remains part of Phase 5
+
+Completed outputs:
+
+- `operation.SaveResult` now serializes oversized `data` through the managed `outputs/` transport
+- oversized `result.json` records stay compact by omitting inline `data`, setting `truncated: true`, and storing `output_id`
+- small operation results still keep inline `data` in `result.json`
+- result payloads use existing output retention until operation-specific retention is implemented
+- CLI smoke test confirmed a large async index result returns `output_id: out_000001` and can be read through `output slice`
 
 ### Task 4.2: Define operation-to-output hints
 
-Status: not started.
+Status: completed.
 
 - make it easy for agents to go from `operation result` to `output show/head/tail/slice`
 
@@ -711,6 +722,13 @@ Concrete cases:
 
 - text mode includes one compact follow-up hint
 - JSON mode includes structured `output_id` without embedding human-only prose
+
+Completed outputs:
+
+- text `operation result` output now marks oversized data as `stored_output`
+- text output includes `output show` and deterministic `output slice --offset 0 --limit 4000` follow-up hints
+- JSON output keeps the structured `OperationResult` contract with `output_id` and `truncated`
+- JSON smoke test confirmed oversized operation results omit inline `data`
 
 ## Phase 5: Cleanup And Retention
 

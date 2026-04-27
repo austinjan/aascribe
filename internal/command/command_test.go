@@ -415,6 +415,46 @@ func TestOperationTextOutputsIncludeUsefulNextHints(t *testing.T) {
 	}
 }
 
+func TestOperationResultTextPointsOversizedDataToOutputTransport(t *testing.T) {
+	storePath := t.TempDir()
+	accepted, err := operation.Create(storePath, operation.CreateInput{
+		Command: "index",
+		Stage:   "complete",
+		Message: "Index operation completed.",
+	})
+	if err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+	if err := operation.SaveResult(storePath, &operation.Result{
+		OperationID: accepted.OperationID,
+		State:       operation.StateSucceeded,
+		Data: map[string]any{
+			"summary": strings.Repeat("large result line\n", 400),
+		},
+		Truncated: false,
+	}); err != nil {
+		t.Fatalf("save result: %v", err)
+	}
+
+	result, err := runOperationResult(storePath, accepted.OperationID)
+	if err != nil {
+		t.Fatalf("operation result: %v", err)
+	}
+	loaded, ok := result.Data.(*operation.Result)
+	if !ok || loaded.OutputID == "" || !loaded.Truncated {
+		t.Fatalf("expected output transport result, got %#v", result.Data)
+	}
+	if !strings.Contains(result.Text, "data: stored_output") {
+		t.Fatalf("expected stored output marker, got %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "aascribe output show "+loaded.OutputID) {
+		t.Fatalf("expected output show hint, got %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "aascribe output slice "+loaded.OutputID+" --offset 0 --limit 4000") {
+		t.Fatalf("expected output slice hint, got %q", result.Text)
+	}
+}
+
 func TestIndexManagementTextOutputsIncludeUsefulNextHints(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello world\n"), 0o644); err != nil {

@@ -267,8 +267,9 @@ Behavior notes:
 - Operation lifecycle state is stored under `<store>/operations/<operation-id>/`.
 - `operation.json` is the latest compact status snapshot.
 - `events.jsonl` is append-only event history.
-- `result.json` is written only when a final result is available.
+- `result.json` is written only when a final result is available. Small results may include `data`; oversized results store data through the managed `output` transport and return `output_id`.
 - `operation result` returns a typed error if the operation has not completed yet.
+- When `operation result` shows `output_id`, use `aascribe output show <output-id>` or `aascribe output slice <output-id> --offset 0 --limit 4000` to inspect the stored payload.
 - `operation cancel` is idempotent for already canceled operations and rejects operations that already succeeded or failed.
 
 Examples:

@@ -4,8 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/austinjan/aascribe/pkg/llmoutput"
 )
 
 func TestCreateWritesInitialStatusSnapshot(t *testing.T) {
@@ -202,6 +205,44 @@ func TestSaveResultAndListOperations(t *testing.T) {
 		if !seen {
 			t.Fatalf("missing operation %s in list", id)
 		}
+	}
+}
+
+func TestSaveResultStoresOversizedDataThroughOutputTransport(t *testing.T) {
+	storePath := t.TempDir()
+
+	accepted, err := Create(storePath, CreateInput{Command: "index", Message: "large result"})
+	if err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+	largeSummary := strings.Repeat("large result line\n", 400)
+	if err := SaveResult(storePath, &Result{
+		OperationID: accepted.OperationID,
+		State:       StateSucceeded,
+		Data: map[string]any{
+			"summary": largeSummary,
+		},
+		Truncated: false,
+	}); err != nil {
+		t.Fatalf("save result: %v", err)
+	}
+
+	result, err := LoadResult(storePath, accepted.OperationID)
+	if err != nil {
+		t.Fatalf("load result: %v", err)
+	}
+	if !result.Truncated || result.OutputID == "" {
+		t.Fatalf("expected output transport reference, got %#v", result)
+	}
+	if result.Data != nil {
+		t.Fatalf("expected oversized data to be omitted from result.json, got %#v", result.Data)
+	}
+	meta, err := llmoutput.Meta(storePath, result.OutputID)
+	if err != nil {
+		t.Fatalf("expected stored output metadata: %v", err)
+	}
+	if meta.TotalRunes <= 4000 {
+		t.Fatalf("expected large stored output, got %#v", meta)
 	}
 }
 

@@ -674,7 +674,9 @@ func renderOperationResultText(result *operation.Result) string {
 	}
 	if result.OutputID != "" {
 		lines = append(lines, fmt.Sprintf("output_id: %s", result.OutputID))
+		lines = append(lines, "data: stored_output")
 		lines = append(lines, "next: aascribe output show "+result.OutputID)
+		lines = append(lines, "slice: aascribe output slice "+result.OutputID+" --offset 0 --limit 4000")
 	}
 	if result.Error != nil {
 		lines = append(lines, fmt.Sprintf("error: %s - %s", result.Error.Code, result.Error.Message))

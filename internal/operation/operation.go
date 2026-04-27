@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/austinjan/aascribe/internal/apperr"
+	"github.com/austinjan/aascribe/pkg/llmoutput"
 )
 
 type State string
@@ -448,7 +449,11 @@ func SaveResult(storePath string, result *Result) error {
 	if err := ensureOperationExists(storePath, result.OperationID); err != nil {
 		return err
 	}
-	return writeJSONAtomic(resultPath(storePath, result.OperationID), result)
+	prepared, err := prepareResultForStorage(storePath, result)
+	if err != nil {
+		return err
+	}
+	return writeJSONAtomic(resultPath(storePath, prepared.OperationID), prepared)
 }
 
 func LoadResult(storePath, id string) (*Result, error) {
@@ -575,6 +580,30 @@ func translateReadError(err error, kind, path string) error {
 		return err
 	}
 	return apperr.IOError("Failed to read %s: %s.", kind, path)
+}
+
+func prepareResultForStorage(storePath string, result *Result) (*Result, error) {
+	if result.Data == nil || result.OutputID != "" {
+		return result, nil
+	}
+
+	dataJSON, err := json.MarshalIndent(result.Data, "", "  ")
+	if err != nil {
+		return nil, apperr.Serialization("Failed to serialize operation result data.")
+	}
+	delivered, err := llmoutput.Deliver(storePath, "operation result", string(dataJSON), llmoutput.DefaultConfig())
+	if err != nil {
+		return nil, err
+	}
+	if !delivered.Hint.Truncated {
+		return result, nil
+	}
+
+	trimmed := *result
+	trimmed.Data = nil
+	trimmed.OutputID = delivered.Hint.OutputID
+	trimmed.Truncated = true
+	return &trimmed, nil
 }
 
 func newID() (string, error) {
