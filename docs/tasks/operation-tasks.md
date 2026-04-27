@@ -43,14 +43,15 @@ Done in the current repo:
 - `index` already has engine-level context propagation for cancellation-sensitive work
 - `index` already has enough internal stage boundaries to become the first real operation candidate
 - checked-in lifecycle shapes now exist in [../shapes](../shapes/README.md) for accepted, status, events, result, and list payloads
-- the first operation inspection command surface now exists: `list`, `status`, `events`, `result`, and `cancel`
+- the first operation inspection command surface now exists: `list`, `status`, `events`, `result`, `cancel`, and `clean`
 - `index --async` has been smoke-tested through the built CLI against a fixture tree
+- oversized operation results are routed through the managed output transport
+- operation cleanup is explicit and user-managed through `operation clean`
 
 Still intentionally incomplete:
 
-- operation retention and cleanup policy are not done yet
-- operation result `output_id` references still use normal output retention; retention coupling is deferred to Phase 5
 - async support is opt-in per command; `index` is the first supported command
+- operation-linked `output_id` payloads still follow the existing output transport retention policy; stronger linked-output retention protection is a future enhancement
 
 ## Scope And Sequencing
 
@@ -420,7 +421,7 @@ Concrete cases:
 
 ### Task 0.3: Define command adoption rules
 
-Status: not started.
+Status: completed.
 
 - decide which commands remain always synchronous
 - decide which commands may opt into long-running mode
@@ -431,6 +432,13 @@ Concrete cases:
 - `init` and `logs path` remain simple synchronous commands
 - `index` supports both synchronous and async/operation execution during the transition phase
 - later commands opt in intentionally instead of inheriting long-running behavior by accident
+
+Completed decisions:
+
+- synchronous command execution remains the default behavior
+- async operation mode is opt-in per command through an explicit command flag
+- `index --async` is the first migrated long-running command
+- `operation ...` is the inspection/control surface for existing operations, not a generic `operation start` surface in this milestone
 
 ## Phase 1: Lifecycle Types And Persistence
 
@@ -832,11 +840,21 @@ Concrete cases:
 
 ### Task 6.1: Update `USAGE.md`
 
+Status: completed.
+
 - document the operation command group
 - document how long-running mode is entered for supported commands
 - document how operations and output transport interact
 
+Completed outputs:
+
+- `docs/USAGE.md` documents `operation list/status/events/result/cancel/clean`
+- `docs/USAGE.md` documents `index --async`
+- `docs/USAGE.md` documents `output_id` follow-up through `output show` and `output slice`
+
 ### Task 6.2: Add shape files
+
+Status: completed.
 
 - add checked-in schemas for:
   - `OperationAccepted`
@@ -845,13 +863,26 @@ Concrete cases:
   - `OperationResult`
   - `OperationList`
 
+Completed outputs:
+
+- checked-in schemas now cover `OperationAccepted`, `OperationStatus`, `OperationEventList`, `OperationResult`, `OperationList`, `OperationCancelResult`, and `OperationCleanResult`
+
 ### Task 6.3: Add examples for agent flows
+
+Status: completed.
 
 - start long-running `index`
 - inspect status
 - inspect events
 - fetch result
 - follow `output_id` if present
+
+Completed outputs:
+
+- help and usage examples show `index --async`
+- accepted operation text includes status/result/cancel next-step hints
+- operation result text points oversized payloads to `output show` and deterministic `output slice`
+- operation cleanup text points agents from dry-run to `operation clean --force`
 
 ## Acceptance Criteria
 
@@ -892,7 +923,6 @@ Recommended delivery order:
 
 ## Open Questions
 
-- should async execution be triggered by `operation start`, a command flag such as `--async`, or both
 - should operation events be command-neutral only, or allow command-specific structured event payloads
 - should partial-success be its own operation state, or remain command-specific result detail
-- should operation retention be fixed-count, time-based, or user-managed
+- should operation-linked output payloads get retention protection beyond the current output transport policy
