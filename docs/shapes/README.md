@@ -26,6 +26,7 @@ This directory is the checked-in source of truth for `aascribe` command `OutputS
 - `MemoryRecallResult.schema.json`
 - `OperationAccepted.schema.json`
 - `OperationCancelResult.schema.json`
+- `OperationCleanResult.schema.json`
 - `OperationEventList.schema.json`
 - `OperationList.schema.json`
 - `OperationResult.schema.json`

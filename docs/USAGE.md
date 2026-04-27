@@ -247,6 +247,7 @@ aascribe operation status <operation-id>
 aascribe operation events <operation-id>
 aascribe operation result <operation-id>
 aascribe operation cancel <operation-id>
+aascribe operation clean [--dry-run] [--force]
 ```
 
 Subcommands:
@@ -261,6 +262,8 @@ Subcommands:
   Show the final result record for one completed operation.
 - `cancel <operation-id>`
   Mark a pending or running operation as canceled.
+- `clean`
+  Remove completed, failed, and canceled operation records from the active store.
 
 Behavior notes:
 
@@ -271,6 +274,8 @@ Behavior notes:
 - `operation result` returns a typed error if the operation has not completed yet.
 - When `operation result` shows `output_id`, use `aascribe output show <output-id>` or `aascribe output slice <output-id> --offset 0 --limit 4000` to inspect the stored payload.
 - `operation cancel` is idempotent for already canceled operations and rejects operations that already succeeded or failed.
+- `operation clean` defaults to dry-run unless `--force` is provided. It never removes `pending` or `running` operations.
+- `operation clean` removes operation lifecycle directories only; managed `outputs/` payloads follow the output transport retention policy.
 
 Examples:
 
@@ -280,6 +285,8 @@ aascribe operation status op_20260424T120000Z_ab12cd34
 aascribe operation events op_20260424T120000Z_ab12cd34
 aascribe operation result op_20260424T120000Z_ab12cd34
 aascribe operation cancel op_20260424T120000Z_ab12cd34
+aascribe operation clean --dry-run
+aascribe operation clean --force
 ```
 
 Output shapes:
@@ -289,6 +296,7 @@ Output shapes:
 - `operation events`: `OperationEventList`
 - `operation result`: `OperationResult`
 - `operation cancel`: `OperationCancelResult`
+- `operation clean`: `OperationCleanResult`
 
 ---
 

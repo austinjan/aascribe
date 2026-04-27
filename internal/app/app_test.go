@@ -122,6 +122,34 @@ func TestParseOperationCancel(t *testing.T) {
 	}
 }
 
+func TestParseOperationCleanDefaultsToDryRun(t *testing.T) {
+	parsed, err := cli.Parse([]string{"operation", "clean"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.OperationCleanCommand)
+	if !ok {
+		t.Fatalf("expected operation clean command, got %#v", parsed.Command)
+	}
+	if !cmd.DryRun || cmd.Force {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
+func TestParseOperationCleanForce(t *testing.T) {
+	parsed, err := cli.Parse([]string{"operation", "clean", "--force"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.OperationCleanCommand)
+	if !ok {
+		t.Fatalf("expected operation clean command, got %#v", parsed.Command)
+	}
+	if cmd.DryRun || !cmd.Force {
+		t.Fatalf("unexpected parsed command: %#v", cmd)
+	}
+}
+
 func TestParseIndexClean(t *testing.T) {
 	parsed, err := cli.Parse([]string{"index", "clean", "./tests", "--dry-run", "--force"})
 	if err != nil {

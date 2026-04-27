@@ -246,6 +246,53 @@ func TestSaveResultStoresOversizedDataThroughOutputTransport(t *testing.T) {
 	}
 }
 
+func TestCleanOperationsDryRunPreservesTerminalOperations(t *testing.T) {
+	storePath := t.TempDir()
+	done := createOperationWithState(t, storePath, StateSucceeded)
+	running := createOperationWithState(t, storePath, StateRunning)
+
+	result, err := Clean(storePath, CleanOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("clean operations: %v", err)
+	}
+	if !result.DryRun || result.RemovedCount != 1 || result.SkippedCount != 1 {
+		t.Fatalf("unexpected dry-run clean result: %#v", result)
+	}
+	if _, err := LoadStatus(storePath, done.OperationID); err != nil {
+		t.Fatalf("dry-run should preserve terminal operation: %v", err)
+	}
+	if _, err := LoadStatus(storePath, running.OperationID); err != nil {
+		t.Fatalf("dry-run should preserve running operation: %v", err)
+	}
+}
+
+func TestCleanOperationsRemovesOnlyTerminalOperations(t *testing.T) {
+	storePath := t.TempDir()
+	done := createOperationWithState(t, storePath, StateSucceeded)
+	failed := createOperationWithState(t, storePath, StateFailed)
+	canceled := createOperationWithState(t, storePath, StateCanceled)
+	pending := createOperationWithState(t, storePath, StatePending)
+	running := createOperationWithState(t, storePath, StateRunning)
+
+	result, err := Clean(storePath, CleanOptions{Force: true})
+	if err != nil {
+		t.Fatalf("clean operations: %v", err)
+	}
+	if result.DryRun || result.RemovedCount != 3 || result.SkippedCount != 2 {
+		t.Fatalf("unexpected clean result: %#v", result)
+	}
+	for _, accepted := range []*Accepted{done, failed, canceled} {
+		if _, err := LoadStatus(storePath, accepted.OperationID); err == nil {
+			t.Fatalf("expected terminal operation %s to be removed", accepted.OperationID)
+		}
+	}
+	for _, accepted := range []*Accepted{pending, running} {
+		if _, err := LoadStatus(storePath, accepted.OperationID); err != nil {
+			t.Fatalf("expected active operation %s to be preserved: %v", accepted.OperationID, err)
+		}
+	}
+}
+
 func TestCancelRunningOperationPersistsCanceledLifecycle(t *testing.T) {
 	storePath := t.TempDir()
 
@@ -285,6 +332,33 @@ func TestCancelRunningOperationPersistsCanceledLifecycle(t *testing.T) {
 	if len(events.Events) != 1 || events.Events[0].Stage != "canceled" {
 		t.Fatalf("expected cancel event, got %#v", events)
 	}
+}
+
+func createOperationWithState(t *testing.T, storePath string, state State) *Accepted {
+	t.Helper()
+	accepted, err := Create(storePath, CreateInput{
+		Command: "index",
+		Stage:   "test",
+		Message: "Test operation.",
+		State:   state,
+	})
+	if err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+	status, err := LoadStatus(storePath, accepted.OperationID)
+	if err != nil {
+		t.Fatalf("load operation: %v", err)
+	}
+	status.State = state
+	if state == StateSucceeded || state == StateFailed || state == StateCanceled {
+		status.Stage = "complete"
+		status.CompletedAt = status.UpdatedAt
+		status.ResultReady = true
+	}
+	if err := SaveStatus(storePath, status); err != nil {
+		t.Fatalf("save operation: %v", err)
+	}
+	return accepted
 }
 
 func TestCancelAlreadyCanceledOperationIsIdempotent(t *testing.T) {

@@ -59,6 +59,8 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 		return runOperationResult(storePath, cmd.ID)
 	case cli.OperationCancelCommand:
 		return runOperationCancel(storePath, cmd.ID)
+	case cli.OperationCleanCommand:
+		return runOperationClean(storePath, cmd)
 	case cli.OperationRunIndexCommand:
 		return runOperationRunIndex(storePath, cmd.OperationID, cmd.Index)
 	case cli.IndexCommand:
@@ -532,6 +534,20 @@ func runOperationCancel(storePath, id string) (*output.CommandResult, error) {
 	}, nil
 }
 
+func runOperationClean(storePath string, cmd cli.OperationCleanCommand) (*output.CommandResult, error) {
+	result, err := operation.Clean(storePath, operation.CleanOptions{
+		DryRun: cmd.DryRun,
+		Force:  cmd.Force,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: result,
+		Text: renderOperationCleanText(result),
+	}, nil
+}
+
 func renderMapText(result *index.PathIndexMap) string {
 	if result == nil {
 		return ""
@@ -685,6 +701,40 @@ func renderOperationResultText(result *operation.Result) string {
 		lines = append(lines, "data: available")
 		lines = append(lines, "next: aascribe --format json operation result "+result.OperationID)
 	}
+	return strings.Join(lines, "\n")
+}
+
+func renderOperationCleanText(result *operation.CleanResult) string {
+	if result == nil {
+		return ""
+	}
+	action := "Removed"
+	next := "next: aascribe operation list"
+	if result.DryRun {
+		action = "Would remove"
+		next = "next: aascribe operation clean --force"
+	}
+	lines := []string{
+		fmt.Sprintf("%s %d terminal operation(s)", action, result.RemovedCount),
+		fmt.Sprintf("skipped %d active operation(s)", result.SkippedCount),
+	}
+	for _, item := range result.Removed {
+		line := fmt.Sprintf("- %s [%s]", item.OperationID, item.State)
+		if result.DryRun {
+			line += " would_remove"
+		} else {
+			line += " removed"
+		}
+		lines = append(lines, line)
+	}
+	for _, item := range result.Skipped {
+		reason := item.Reason
+		if reason == "" {
+			reason = "skipped"
+		}
+		lines = append(lines, fmt.Sprintf("- %s [%s] skipped: %s", item.OperationID, item.State, reason))
+	}
+	lines = append(lines, next)
 	return strings.Join(lines, "\n")
 }
 

@@ -455,6 +455,51 @@ func TestOperationResultTextPointsOversizedDataToOutputTransport(t *testing.T) {
 	}
 }
 
+func TestRunOperationCleanReturnsCleanupSummary(t *testing.T) {
+	storePath := t.TempDir()
+	done, err := operation.Create(storePath, operation.CreateInput{Command: "index"})
+	if err != nil {
+		t.Fatalf("create done operation: %v", err)
+	}
+	status, err := operation.LoadStatus(storePath, done.OperationID)
+	if err != nil {
+		t.Fatalf("load done operation: %v", err)
+	}
+	status.State = operation.StateSucceeded
+	status.Stage = "complete"
+	status.Message = "Operation completed."
+	status.ResultReady = true
+	status.CompletedAt = status.UpdatedAt
+	if err := operation.SaveStatus(storePath, status); err != nil {
+		t.Fatalf("save done operation: %v", err)
+	}
+	running, err := operation.Create(storePath, operation.CreateInput{Command: "index", State: operation.StateRunning})
+	if err != nil {
+		t.Fatalf("create running operation: %v", err)
+	}
+
+	result, err := runOperationClean(storePath, cli.OperationCleanCommand{DryRun: true})
+	if err != nil {
+		t.Fatalf("operation clean: %v", err)
+	}
+	clean, ok := result.Data.(*operation.CleanResult)
+	if !ok || !clean.DryRun || clean.RemovedCount != 1 || clean.SkippedCount != 1 {
+		t.Fatalf("unexpected clean payload: %#v", result.Data)
+	}
+	if !strings.Contains(result.Text, "Would remove 1 terminal operation(s)") {
+		t.Fatalf("expected dry-run text, got %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "skipped 1 active operation(s)") {
+		t.Fatalf("expected skipped text, got %q", result.Text)
+	}
+	if _, err := operation.LoadStatus(storePath, done.OperationID); err != nil {
+		t.Fatalf("dry-run should preserve done operation: %v", err)
+	}
+	if _, err := operation.LoadStatus(storePath, running.OperationID); err != nil {
+		t.Fatalf("dry-run should preserve running operation: %v", err)
+	}
+}
+
 func TestIndexManagementTextOutputsIncludeUsefulNextHints(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello world\n"), 0o644); err != nil {

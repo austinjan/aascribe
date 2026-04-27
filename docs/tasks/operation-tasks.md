@@ -734,7 +734,7 @@ Completed outputs:
 
 ### Task 5.1: Define operation retention policy
 
-Status: not started.
+Status: completed.
 
 - decide how many operations to retain
 - decide how completed/failed/canceled operations are pruned
@@ -745,9 +745,16 @@ Concrete cases:
 - pruning should preserve store consistency when result/output references exist
 - agents should still be able to inspect recent failed operations after completion
 
+Completed outputs:
+
+- cleanup is explicit and user-managed through `operation clean`; no silent automatic pruning is introduced in this milestone
+- `pending` and `running` operations are always preserved
+- terminal operations are eligible for cleanup when they are `succeeded`, `failed`, or `canceled`
+- cleanup removes operation lifecycle directories only; referenced `output_id` payloads stay under the existing output transport retention policy
+
 ### Task 5.2: Add cleanup command or policy hooks
 
-Status: not started.
+Status: completed.
 
 - explicit cleanup command is preferred over silent deletion if retained state becomes user-visible
 
@@ -755,6 +762,20 @@ Concrete cases:
 
 - dry-run cleanup is preferred if cleanup becomes recursive or destructive
 - cleanup must not remove still-running operations
+
+Implemented command:
+
+- `aascribe operation clean --dry-run`
+- `aascribe operation clean --force`
+
+Implemented behavior:
+
+- default to dry-run unless `--force` is provided
+- report removed and skipped operations
+- skip non-terminal operations with a clear state-based reason
+- text output gives a safe next step: `operation clean --force` after dry-run, or `operation list` after deletion
+- JSON output returns `OperationCleanResult`
+- CLI smoke test confirmed `operation clean --dry-run` previews terminal removals and `operation clean --force` removes them from a throwaway store
 
 ## Verification
 

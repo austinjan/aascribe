@@ -108,6 +108,26 @@ type CancelResult struct {
 	Message     string `json:"message"`
 }
 
+type CleanOptions struct {
+	DryRun bool
+	Force  bool
+}
+
+type CleanItem struct {
+	OperationID string `json:"operation_id"`
+	State       State  `json:"state"`
+	Path        string `json:"path"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+type CleanResult struct {
+	DryRun       bool        `json:"dry_run"`
+	RemovedCount int         `json:"removed_count"`
+	SkippedCount int         `json:"skipped_count"`
+	Removed      []CleanItem `json:"removed"`
+	Skipped      []CleanItem `json:"skipped"`
+}
+
 type CreateInput struct {
 	Command string
 	Stage   string
@@ -504,6 +524,67 @@ func ListOperations(storePath string) (*List, error) {
 		return items[i].UpdatedAt > items[j].UpdatedAt
 	})
 	return &List{Count: len(items), Items: items}, nil
+}
+
+func Clean(storePath string, opts CleanOptions) (*CleanResult, error) {
+	if !opts.Force {
+		opts.DryRun = true
+	}
+	dir := storeDir(storePath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, apperr.IOError("Failed to create operations directory: %s.", dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, apperr.IOError("Failed to read operations directory: %s.", dir)
+	}
+
+	result := &CleanResult{
+		DryRun:  opts.DryRun,
+		Removed: []CleanItem{},
+		Skipped: []CleanItem{},
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		id := entry.Name()
+		path := operationDir(storePath, id)
+		status, err := LoadStatus(storePath, id)
+		if err != nil {
+			result.Skipped = append(result.Skipped, CleanItem{
+				OperationID: id,
+				State:       "",
+				Path:        path,
+				Reason:      "unreadable_status",
+			})
+			continue
+		}
+		item := CleanItem{
+			OperationID: id,
+			State:       status.State,
+			Path:        path,
+		}
+		if !isTerminal(status.State) {
+			item.Reason = "active_operation"
+			result.Skipped = append(result.Skipped, item)
+			continue
+		}
+		result.Removed = append(result.Removed, item)
+		if opts.DryRun {
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return nil, apperr.IOError("Failed to remove operation directory: %s.", path)
+		}
+	}
+	result.RemovedCount = len(result.Removed)
+	result.SkippedCount = len(result.Skipped)
+	return result, nil
+}
+
+func isTerminal(state State) bool {
+	return state == StateSucceeded || state == StateFailed || state == StateCanceled
 }
 
 func storeDir(storePath string) string {

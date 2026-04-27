@@ -258,6 +258,13 @@ func errorGuidance(err error, appErr *apperr.Error, command, store string) (stri
 				"aascribe operation cancel op_20260424T120000Z_ab12cd34",
 			}
 		}
+		if strings.Contains(message, "operation clean does not accept positional arguments") {
+			return "Run `operation clean` without positional arguments; use `--dry-run` to preview or `--force` to remove terminal operation records.", []string{
+				"aascribe operation clean --dry-run",
+				"aascribe operation clean --force",
+				"aascribe operation list",
+			}
+		}
 		if strings.Contains(message, "init does not accept positional arguments") {
 			return "Run `init` without positional arguments; use flags like `--force` or `--store` instead.", []string{
 				"aascribe init",

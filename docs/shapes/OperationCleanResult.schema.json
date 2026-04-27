@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/OperationCleanResult",
+  "title": "OperationCleanResult",
+  "description": "Result of cleaning terminal long-running operation records from the active store.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "dry_run": {
+      "type": "boolean"
+    },
+    "removed_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "skipped_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "removed": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/item"
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/item"
+      }
+    }
+  },
+  "required": ["dry_run", "removed_count", "skipped_count", "removed", "skipped"],
+  "$defs": {
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": ["operation_id", "state", "path"]
+    }
+  }
+}

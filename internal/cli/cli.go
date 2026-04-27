@@ -173,6 +173,13 @@ type OperationCancelCommand struct {
 
 func (c OperationCancelCommand) Name() string { return "operation" }
 
+type OperationCleanCommand struct {
+	DryRun bool
+	Force  bool
+}
+
+func (c OperationCleanCommand) Name() string { return "operation" }
+
 type OperationRunIndexCommand struct {
 	OperationID string
 	Index       IndexCommand
@@ -602,6 +609,7 @@ Subcommands:
   events    Show the persisted event history for one operation
   result    Show the final result record for one completed operation
   cancel    Mark a pending or running operation as canceled
+  clean     Remove terminal operation records from the active store
 
 Examples:
   aascribe operation list
@@ -609,6 +617,7 @@ Examples:
   aascribe operation events op_20260424T120000Z_ab12cd34
   aascribe operation result op_20260424T120000Z_ab12cd34
   aascribe operation cancel op_20260424T120000Z_ab12cd34
+  aascribe operation clean --dry-run
 `)
 	case "operation list":
 		return strings.TrimSpace(`
@@ -659,6 +668,24 @@ Usage:
 
 Examples:
   aascribe operation cancel op_20260424T120000Z_ab12cd34
+`)
+	case "operation clean":
+		return strings.TrimSpace(`
+aascribe operation clean - remove terminal operation records
+
+Purpose:
+  Clean completed, failed, and canceled operation lifecycle records while preserving pending and running operations.
+
+Usage:
+  aascribe operation clean [--dry-run] [--force]
+
+Behavior:
+  Defaults to dry-run unless --force is provided.
+  Does not remove managed output payloads referenced by operation results.
+
+Examples:
+  aascribe operation clean --dry-run
+  aascribe operation clean --force
 `)
 	case "index":
 		return strings.TrimSpace(`
@@ -1249,7 +1276,7 @@ func parseInit(args []string) (Command, error) {
 
 func parseOperation(args []string) (Command, error) {
 	if len(args) == 0 {
-		return nil, newParseError(ParseErrorMissingNestedCommand, "operation", "", "operation requires a subcommand: list, status, events, result, or cancel.")
+		return nil, newParseError(ParseErrorMissingNestedCommand, "operation", "", "operation requires a subcommand: list, status, events, result, cancel, or clean.")
 	}
 
 	switch args[0] {
@@ -1278,11 +1305,30 @@ func parseOperation(args []string) (Command, error) {
 			return nil, newParseError(ParseErrorMissingRequiredArg, "operation cancel", "operation-id", "operation cancel requires exactly one operation id argument.")
 		}
 		return OperationCancelCommand{ID: args[1]}, nil
+	case "clean":
+		return parseOperationClean(args[1:])
 	case "run-index":
 		return parseOperationRunIndex(args[1:])
 	default:
-		return nil, newUnknownNestedCommandError("operation", args[0], []string{"list", "status", "events", "result", "cancel"})
+		return nil, newUnknownNestedCommandError("operation", args[0], []string{"list", "status", "events", "result", "cancel", "clean"})
 	}
+}
+
+func parseOperationClean(args []string) (Command, error) {
+	fs := newFlagSet("operation clean")
+	var cmd OperationCleanCommand
+	fs.BoolVar(&cmd.DryRun, "dry-run", false, "")
+	fs.BoolVar(&cmd.Force, "force", false, "")
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 0 {
+		return nil, newParseError(ParseErrorDoesNotAcceptArgs, "operation clean", "", "operation clean does not accept positional arguments.")
+	}
+	if !cmd.Force {
+		cmd.DryRun = true
+	}
+	return cmd, nil
 }
 
 func parseIndex(args []string) (Command, error) {
