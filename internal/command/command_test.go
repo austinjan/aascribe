@@ -99,7 +99,14 @@ timeout_seconds = 30
 		if !strings.Contains(prompt, "File path:") || !strings.Contains(prompt, "notes.txt") {
 			t.Fatalf("expected file path in prompt, got %q", prompt)
 		}
-		return &llm.TextResponse{Text: "LLM index summary."}, nil
+		return &llm.TextResponse{
+			Text: "LLM index summary.",
+			Usage: llm.Usage{
+				PromptTokenCount:     11,
+				CandidatesTokenCount: 7,
+				TotalTokenCount:      18,
+			},
+		}, nil
 	}
 	defer func() {
 		promptRunner = original
@@ -120,6 +127,27 @@ timeout_seconds = 30
 	}
 	if len(tree.Tree.Children) != 1 || tree.Tree.Children[0].Summary != "LLM index summary." {
 		t.Fatalf("expected LLM summary in index result, got %#v", tree.Tree.Children)
+	}
+	if tree.ReportPath == "" {
+		t.Fatalf("expected report path in index result")
+	}
+	report, err := os.ReadFile(tree.ReportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	reportText := string(report)
+	for _, want := range []string{
+		"# Indexing Report",
+		"- mode: sync",
+		"- total_discovered_files: 1",
+		"- summarized_files: 1",
+		"- prompt_tokens: 11",
+		"- output_tokens: 7",
+		"- total_tokens: 18",
+	} {
+		if !strings.Contains(reportText, want) {
+			t.Fatalf("expected report to contain %q, got:\n%s", want, reportText)
+		}
 	}
 }
 
@@ -222,6 +250,9 @@ func TestRunOperationRunIndexCompletesOperationResult(t *testing.T) {
 	}
 	if !strings.Contains(string(encoded), "notes.txt") {
 		t.Fatalf("expected indexed file in result data, got %s", string(encoded))
+	}
+	if !strings.Contains(string(encoded), "report_path") {
+		t.Fatalf("expected report_path in result data, got %s", string(encoded))
 	}
 }
 

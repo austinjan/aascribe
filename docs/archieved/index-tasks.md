@@ -17,8 +17,9 @@ What shipped in this milestone:
 
 Follow-up work that grows beyond this milestone now belongs in separate docs, especially:
 
-- [../tasks/operation-tasks.md](../tasks/operation-tasks.md) for long-running command lifecycle
+- [operation-tasks.md](operation-tasks.md) for long-running command lifecycle
 - future shape/service work if `describe` and `index` are further unified
+- index reporting details are captured below for the durable Markdown report written after each completed index job
 
 Task breakdown for implementing `aascribe index` in the current Go codebase.
 
@@ -53,6 +54,7 @@ Done in the current repo:
 - `index` now supports fixed-worker direct-file concurrency and a `--concurrency` CLI flag
 - `index` now propagates context into summarizer work so cancellation/timeouts can stop in-flight indexing
 - `index` now runs direct child folders through a fixed subtree-worker pool while bounding local folder rebuild work with a shared folder semaphore
+- completed sync and async `index` jobs now write a durable Markdown report under `data/report/`
 - `index dirty` is implemented and marks existing per-folder metadata stale recursively
 - `index eval` is implemented and reports which folders and direct files need indexing versus which are unchanged
 - fixture-based tests exist under `tests/index-fixtures` and cover ignore behavior, text detection, binary detection, and multi-level traversal
@@ -63,6 +65,52 @@ Still intentionally incomplete:
 - folder summaries are still deterministic placeholders, not real bottom-up LLM summaries
 - `index` runs synchronously and does not yet provide agent-friendly handling for long-running indexing work
 - subtree concurrency is now bounded, but descendants inside one subtree worker still recurse inline rather than through another shared fixed folder worker pool
+
+## Follow-up: Index Completion Report
+
+After an `index` job finishes, `aascribe` writes a Markdown report file under:
+
+```text
+data/report/2026-04-03-101233-indexing-report.md
+```
+
+The filename is composed from the completion timestamp plus the fixed suffix `indexing-report.md`:
+
+```text
+data/report/<yyyy-mm-dd-HHMMSS>-indexing-report.md
+```
+
+The report is a durable run artifact for agents, not the primary command result. The command still returns its normal `PathIndexTree` or operation result while the report gives a compact audit trail for later review.
+
+Required report content:
+
+- indexed root path
+- command mode: synchronous or async operation
+- operation id, when the run was async
+- start time, finish time, and elapsed duration
+- total discovered file count
+- total indexed or summarized file count
+- unchanged file count skipped through metadata reuse
+- not-indexed file count, grouped by reason such as binary file, max file size, or no-summary mode
+- failed file count with short failure reasons
+- token usage, including prompt tokens, output tokens, total tokens, and provider/model when available
+- covered folders, preferably as a compact folder list or tree
+- effective indexing options: depth, include patterns, exclude patterns, refresh, no-summary, max file size, and concurrency
+- generated metadata files count and report path
+
+Worth recording if available:
+
+- changed, new, deleted, and retried file counts
+- reused metadata files count
+- dirty or stale folders encountered
+- ignored folders and files count, with top reasons or patterns
+- largest skipped files by size, capped to keep the report readable
+- slowest summarized files or folders, capped to the top few entries
+- cancellation or timeout status
+- warning list emitted during traversal, including consecutive-failure warnings
+- output transport reference if the command result spilled to managed output storage
+
+The report should stay bounded and readable. Large per-file details should be summarized in counts and short capped lists; deep inspection should remain available through metadata, map, operation events, or output browsing commands.
 
 ## Scope And Sequencing
 

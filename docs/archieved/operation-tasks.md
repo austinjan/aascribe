@@ -1,5 +1,9 @@
 # Long-Running Operation Tasks
 
+Status: Completed and archived
+
+This document is archived because the first long-running operation milestone is complete enough to move out of the active task list.
+
 Task breakdown for adding a unified long-running operation mechanism to `aascribe`.
 
 This document is execution-oriented. It defines one shared contract for commands that may take longer than a normal synchronous CLI call, using the current project constraints:

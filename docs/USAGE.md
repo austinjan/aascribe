@@ -332,6 +332,7 @@ Behavior notes:
 - `index` treats `.gitignore` and `.aaignore` as folder-scoped blacklist exclude files during traversal.
 - Text-file detection is content-based, not extension-based.
 - `index` writes `.aascribe_index_meta.json` files in indexed directories.
+- Successful sync and async `index` jobs also write a Markdown completion report under `data/report/` when using the default `data/memory` store.
 - Each `.aascribe_index_meta.json` is local-only: it describes the current folder and its direct files, not a full descendant tree.
 - Metadata records persisted file descriptions, non-indexed files, failures, and warnings.
 - `index` uses bounded direct-file concurrency. Increase `--concurrency` to speed up summarize/hash work; keep it low if the LLM backend or machine is the bottleneck.
@@ -363,6 +364,7 @@ OutputShape: OperationAccepted (index --async)
   "ok": true,
   "data": {
     "root": "/abs/path/to/src",
+    "report_path": "/abs/path/to/data/report/2026-04-03-101233-indexing-report.md",
     "tree": {
       "path": "src",
       "type": "dir",

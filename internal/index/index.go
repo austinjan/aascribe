@@ -42,8 +42,25 @@ type Options struct {
 type SummarizerFunc func(ctx context.Context, path, content, length, focus string) (string, error)
 
 type PathIndexTree struct {
-	Root string          `json:"root"`
-	Tree IndexedPathNode `json:"tree"`
+	Root       string          `json:"root"`
+	Tree       IndexedPathNode `json:"tree"`
+	ReportPath string          `json:"report_path,omitempty"`
+	Run        *RunReport      `json:"-"`
+}
+
+type RunReport struct {
+	StartedAt             string         `json:"started_at"`
+	FinishedAt            string         `json:"finished_at"`
+	TotalDiscoveredFiles  int            `json:"total_discovered_files"`
+	SummarizedFiles       int            `json:"summarized_files"`
+	UnchangedSkippedFiles int            `json:"unchanged_skipped_files"`
+	NotIndexedFiles       int            `json:"not_indexed_files"`
+	FailedFiles           int            `json:"failed_files"`
+	MetadataFiles         int            `json:"metadata_files"`
+	CoveredFolders        []string       `json:"covered_folders"`
+	NotIndexedReasons     map[string]int `json:"not_indexed_reasons,omitempty"`
+	FailureReasons        map[string]int `json:"failure_reasons,omitempty"`
+	Warnings              []string       `json:"warnings,omitempty"`
 }
 
 type CleanResult struct {
@@ -185,6 +202,8 @@ type buildRuntime struct {
 	ctx           context.Context
 	fileWorkers   int
 	folderLimiter chan struct{}
+	report        *RunReport
+	reportMu      sync.Mutex
 }
 
 type fileBuildResult struct {
@@ -223,11 +242,17 @@ func Build(opts Options) (*PathIndexTree, error) {
 	}
 
 	matcher := newMatcher(opts.Include, append([]string{}, append(defaultExcludes, opts.Exclude...)...))
-	timestamp := time.Now().UTC().Format(time.RFC3339)
+	started := time.Now().UTC()
+	timestamp := started.Format(time.RFC3339)
 	tracker := newFailureTracker(opts.FailureThreshold, opts.FailureNoticeWriter)
 	rt := newBuildRuntime(opts.MaxConcurrency)
 	if opts.Context != nil {
 		rt.ctx = opts.Context
+	}
+	rt.report = &RunReport{
+		StartedAt:         timestamp,
+		NotIndexedReasons: map[string]int{},
+		FailureReasons:    map[string]int{},
 	}
 	rootName := filepath.Base(root)
 	if rootName == "." || rootName == string(filepath.Separator) || rootName == "" {
@@ -239,9 +264,16 @@ func Build(opts Options) (*PathIndexTree, error) {
 		return nil, err
 	}
 
+	rt.reportMu.Lock()
+	rt.report.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	sort.Strings(rt.report.CoveredFolders)
+	report := rt.report
+	rt.reportMu.Unlock()
+
 	return &PathIndexTree{
 		Root: root,
 		Tree: tree,
+		Run:  report,
 	}, nil
 }
 
@@ -539,6 +571,7 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 	if err := runtimeContextErr(rt); err != nil {
 		return IndexedPathNode{}, err
 	}
+	rt.noteFolder(absPath)
 	entries, err := os.ReadDir(absPath)
 	if err != nil {
 		return IndexedPathNode{}, apperr.IOError("Failed to read directory: %s.", absPath)
@@ -587,6 +620,7 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 		if result.err != nil {
 			recordFailure(metadata, result.path, result.err.Error())
 			recordMetadataFailure(metadata, result.path, result.err.Error())
+			rt.noteFailedFile(result.err.Error())
 			tracker.noteFailure(metadata)
 			continue
 		}
@@ -603,6 +637,7 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 			if result.err != nil {
 				recordFailure(metadata, result.node.Path, result.err.Error())
 				recordMetadataFailure(metadata, result.node.Path, result.err.Error())
+				rt.noteFailedFile(result.err.Error())
 				tracker.noteFailure(metadata)
 				continue
 			}
@@ -637,14 +672,18 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 	if err := writeMetadata(absPath, metadata); err != nil {
 		return IndexedPathNode{}, err
 	}
+	rt.noteMetadataFile()
+	rt.noteWarnings(metadata.Warnings)
 
 	return node, nil
 }
 
-func buildFile(absPath, displayPath string, opts Options, timestamp string, metadata *Metadata, priorMetadata *Metadata) (IndexedPathNode, error) {
+func buildFile(absPath, displayPath string, opts Options, timestamp string, metadata *Metadata, priorMetadata *Metadata, rt *buildRuntime) (IndexedPathNode, error) {
+	rt.noteDiscoveredFile()
 	if reused, ok, err := reuseFileFromMetadata(absPath, displayPath, opts, metadata, priorMetadata); err != nil {
 		return IndexedPathNode{}, err
 	} else if ok {
+		rt.noteReusedFile()
 		return reused, nil
 	}
 
@@ -666,17 +705,20 @@ func buildFile(absPath, displayPath string, opts Options, timestamp string, meta
 	if opts.NoSummary {
 		recordNotIndexed(metadata, displayPath, "no_summary_mode")
 		recordMetadataFile(metadata, analysis, "not_indexed", "no_summary_mode", "")
+		rt.noteNotIndexed("no_summary_mode")
 		return node, nil
 	}
 
 	if analysis.notIndexed != "" {
 		recordNotIndexed(metadata, displayPath, analysis.notIndexed)
 		recordMetadataFile(metadata, analysis, "not_indexed", analysis.notIndexed, "")
+		rt.noteNotIndexed(analysis.notIndexed)
 		return node, nil
 	}
 	node.Summary = analysis.summary
 	node.SummarizedAt = analysis.generatedAt
 	recordMetadataFile(metadata, analysis, "ok", "", "")
+	rt.noteSummarizedFile()
 	return node, nil
 }
 
@@ -713,7 +755,7 @@ func processFilesConcurrently(absPath, displayPath string, entries []os.DirEntry
 				childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
 				childAbs := filepath.Join(absPath, name)
 				localMeta := &Metadata{}
-				node, err := buildFile(childAbs, childDisplay, opts, timestamp, localMeta, priorMetadata)
+				node, err := buildFile(childAbs, childDisplay, opts, timestamp, localMeta, priorMetadata, rt)
 				results[job.index] = fileBuildResult{
 					node:     node,
 					metadata: *localMeta,
@@ -1373,6 +1415,84 @@ func newBuildRuntime(maxConcurrency int) *buildRuntime {
 		fileWorkers:   maxConcurrency,
 		folderLimiter: make(chan struct{}, maxConcurrency),
 	}
+}
+
+func (rt *buildRuntime) noteFolder(path string) {
+	if rt == nil || rt.report == nil {
+		return
+	}
+	rt.reportMu.Lock()
+	rt.report.CoveredFolders = append(rt.report.CoveredFolders, path)
+	rt.reportMu.Unlock()
+}
+
+func (rt *buildRuntime) noteDiscoveredFile() {
+	if rt == nil || rt.report == nil {
+		return
+	}
+	rt.reportMu.Lock()
+	rt.report.TotalDiscoveredFiles++
+	rt.reportMu.Unlock()
+}
+
+func (rt *buildRuntime) noteSummarizedFile() {
+	if rt == nil || rt.report == nil {
+		return
+	}
+	rt.reportMu.Lock()
+	rt.report.SummarizedFiles++
+	rt.reportMu.Unlock()
+}
+
+func (rt *buildRuntime) noteReusedFile() {
+	if rt == nil || rt.report == nil {
+		return
+	}
+	rt.reportMu.Lock()
+	rt.report.UnchangedSkippedFiles++
+	rt.reportMu.Unlock()
+}
+
+func (rt *buildRuntime) noteNotIndexed(reason string) {
+	if rt == nil || rt.report == nil {
+		return
+	}
+	rt.reportMu.Lock()
+	rt.report.NotIndexedFiles++
+	if reason != "" {
+		rt.report.NotIndexedReasons[reason]++
+	}
+	rt.reportMu.Unlock()
+}
+
+func (rt *buildRuntime) noteFailedFile(errMsg string) {
+	if rt == nil || rt.report == nil {
+		return
+	}
+	rt.reportMu.Lock()
+	rt.report.FailedFiles++
+	if errMsg != "" {
+		rt.report.FailureReasons[errMsg]++
+	}
+	rt.reportMu.Unlock()
+}
+
+func (rt *buildRuntime) noteMetadataFile() {
+	if rt == nil || rt.report == nil {
+		return
+	}
+	rt.reportMu.Lock()
+	rt.report.MetadataFiles++
+	rt.reportMu.Unlock()
+}
+
+func (rt *buildRuntime) noteWarnings(warnings []string) {
+	if rt == nil || rt.report == nil || len(warnings) == 0 {
+		return
+	}
+	rt.reportMu.Lock()
+	rt.report.Warnings = append(rt.report.Warnings, warnings...)
+	rt.reportMu.Unlock()
 }
 
 func runWithFolderLimiter(rt *buildRuntime, fn func() error) error {

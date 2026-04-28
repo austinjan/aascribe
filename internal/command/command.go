@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/austinjan/aascribe/internal/apperr"
@@ -25,6 +26,55 @@ import (
 )
 
 var promptRunner = runPrompt
+
+type tokenUsageTracker struct {
+	mu              sync.Mutex
+	promptTokens    int
+	candidateTokens int
+	totalTokens     int
+	provider        string
+	model           string
+	available       bool
+}
+
+func (t *tokenUsageTracker) note(provider, model string, usage llm.Usage) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.available = true
+	t.provider = provider
+	t.model = model
+	t.promptTokens += usage.PromptTokenCount
+	t.candidateTokens += usage.CandidatesTokenCount
+	t.totalTokens += usage.TotalTokenCount
+}
+
+func (t *tokenUsageTracker) snapshot() tokenUsageSnapshot {
+	if t == nil {
+		return tokenUsageSnapshot{}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return tokenUsageSnapshot{
+		PromptTokens:    t.promptTokens,
+		CandidateTokens: t.candidateTokens,
+		TotalTokens:     t.totalTokens,
+		Provider:        t.provider,
+		Model:           t.model,
+		Available:       t.available,
+	}
+}
+
+type tokenUsageSnapshot struct {
+	PromptTokens    int
+	CandidateTokens int
+	TotalTokens     int
+	Provider        string
+	Model           string
+	Available       bool
+}
 
 func Execute(command cli.Command, storePath string) (*output.CommandResult, error) {
 	switch cmd := command.(type) {
@@ -107,7 +157,8 @@ func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, er
 	if cmd.Async {
 		return runIndexAsync(storePath, cmd)
 	}
-	summarizer := buildLLMSummarizer(storePath)
+	usage := &tokenUsageTracker{}
+	summarizer := buildLLMSummarizer(storePath, usage)
 	result, err := index.Build(index.Options{
 		Root:                cmd.Path,
 		Depth:               cmd.Depth,
@@ -123,10 +174,15 @@ func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, er
 	if err != nil {
 		return nil, err
 	}
+	reportPath, err := writeIndexCompletionReport(storePath, cmd, result, "", "sync", usage.snapshot())
+	if err != nil {
+		return nil, err
+	}
+	result.ReportPath = reportPath
 
 	return &output.CommandResult{
 		Data: result,
-		Text: renderIndexText(result),
+		Text: renderIndexText(result) + "\nreport: " + reportPath,
 	}, nil
 }
 
@@ -240,6 +296,7 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 	ctx, stopCancelWatch := operation.ContextWithCancelWatch(context.Background(), storePath, operationID)
 	defer stopCancelWatch()
 
+	usage := &tokenUsageTracker{}
 	result, err := index.Build(index.Options{
 		Context:             ctx,
 		Root:                cmd.Path,
@@ -250,7 +307,7 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 		Refresh:             cmd.Refresh,
 		NoSummary:           cmd.NoSummary,
 		MaxFileSize:         cmd.MaxFileSize,
-		Summarizer:          buildLLMSummarizer(storePath),
+		Summarizer:          buildLLMSummarizer(storePath, usage),
 		FailureNoticeWriter: io.Discard,
 	})
 
@@ -286,6 +343,32 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 		_ = reporter.Report(operation.Report{Stage: "failed", Message: err.Error(), Level: "error"})
 		return nil, err
 	}
+
+	reportPath, err := writeIndexCompletionReport(storePath, cmd, result, operationID, "async", usage.snapshot())
+	if err != nil {
+		current.State = operation.StateFailed
+		current.Stage = "failed"
+		current.Message = err.Error()
+		current.UpdatedAt = now
+		current.CompletedAt = now
+		current.ResultReady = true
+		current.Error = &operation.ErrorDetail{Code: output.ErrorCode(err), Message: err.Error()}
+		if saveErr := operation.SaveStatus(storePath, current); saveErr != nil {
+			return nil, saveErr
+		}
+		if saveErr := operation.SaveResult(storePath, &operation.Result{
+			OperationID: operationID,
+			State:       operation.StateFailed,
+			CompletedAt: now,
+			Truncated:   false,
+			Error:       current.Error,
+		}); saveErr != nil {
+			return nil, saveErr
+		}
+		_ = reporter.Report(operation.Report{Stage: "failed", Message: err.Error(), Level: "error"})
+		return nil, err
+	}
+	result.ReportPath = reportPath
 
 	current.State = operation.StateSucceeded
 	current.Stage = "complete"
@@ -412,7 +495,7 @@ func runDescribe(storePath string, cmd cli.DescribeCommand) (*output.CommandResu
 }
 
 func describeWithFallback(storePath string, cmd cli.DescribeCommand) (*index.FileDescription, error) {
-	return index.DescribeFileWithSummarizer(cmd.File, cmd.Length, cmd.Focus, buildLLMSummarizer(storePath))
+	return index.DescribeFileWithSummarizer(cmd.File, cmd.Length, cmd.Focus, buildLLMSummarizer(storePath, nil))
 }
 
 func runLogsPath(storePath string) *output.CommandResult {
@@ -962,6 +1045,142 @@ func runOutputGenerate(cmd cli.OutputGenerateCommand) (*output.CommandResult, er
 	}, nil
 }
 
+func writeIndexCompletionReport(storePath string, cmd cli.IndexCommand, result *index.PathIndexTree, operationID, mode string, usage tokenUsageSnapshot) (string, error) {
+	if result == nil || result.Run == nil {
+		return "", apperr.IOError("Failed to build index report: missing run statistics.")
+	}
+	reportDir := filepath.Join(filepath.Dir(storePath), "report")
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		return "", apperr.IOError("Failed to create index report directory: %s.", reportDir)
+	}
+	finishedAt, err := time.Parse(time.RFC3339, result.Run.FinishedAt)
+	if err != nil {
+		finishedAt = time.Now().UTC()
+	}
+	reportPath := filepath.Join(reportDir, finishedAt.UTC().Format("2006-01-02-150405")+"-indexing-report.md")
+	content := renderIndexCompletionReport(cmd, result, operationID, mode, usage, reportPath)
+	if err := os.WriteFile(reportPath, []byte(content), 0o644); err != nil {
+		return "", apperr.IOError("Failed to write index report: %s.", reportPath)
+	}
+	return reportPath, nil
+}
+
+func renderIndexCompletionReport(cmd cli.IndexCommand, result *index.PathIndexTree, operationID, mode string, usage tokenUsageSnapshot, reportPath string) string {
+	run := result.Run
+	lines := []string{
+		"# Indexing Report",
+		"",
+		"## Summary",
+		"",
+		"- indexed_root: " + result.Root,
+		"- mode: " + mode,
+	}
+	if operationID != "" {
+		lines = append(lines, "- operation_id: "+operationID)
+	}
+	lines = append(lines,
+		"- started_at: "+run.StartedAt,
+		"- finished_at: "+run.FinishedAt,
+		"- elapsed: "+elapsedText(run.StartedAt, run.FinishedAt),
+		"- report_path: "+reportPath,
+		"",
+		"## File Counts",
+		"",
+		fmt.Sprintf("- total_discovered_files: %d", run.TotalDiscoveredFiles),
+		fmt.Sprintf("- summarized_files: %d", run.SummarizedFiles),
+		fmt.Sprintf("- unchanged_skipped_files: %d", run.UnchangedSkippedFiles),
+		fmt.Sprintf("- not_indexed_files: %d", run.NotIndexedFiles),
+		fmt.Sprintf("- failed_files: %d", run.FailedFiles),
+		fmt.Sprintf("- metadata_files: %d", run.MetadataFiles),
+		"",
+		"## Token Usage",
+		"",
+	)
+	if usage.Available {
+		lines = append(lines,
+			"- provider: "+usage.Provider,
+			"- model: "+usage.Model,
+			fmt.Sprintf("- prompt_tokens: %d", usage.PromptTokens),
+			fmt.Sprintf("- output_tokens: %d", usage.CandidateTokens),
+			fmt.Sprintf("- total_tokens: %d", usage.TotalTokens),
+		)
+	} else {
+		lines = append(lines,
+			"- provider: unavailable",
+			"- model: unavailable",
+			"- prompt_tokens: 0",
+			"- output_tokens: 0",
+			"- total_tokens: 0",
+		)
+	}
+	lines = append(lines,
+		"",
+		"## Effective Options",
+		"",
+		fmt.Sprintf("- depth: %d", cmd.Depth),
+		"- include: "+stringListText(cmd.Include),
+		"- exclude: "+stringListText(cmd.Exclude),
+		fmt.Sprintf("- refresh: %t", cmd.Refresh),
+		fmt.Sprintf("- no_summary: %t", cmd.NoSummary),
+		fmt.Sprintf("- max_file_size: %d", cmd.MaxFileSize),
+		fmt.Sprintf("- concurrency: %d", cmd.Concurrency),
+		"",
+		"## Not Indexed Reasons",
+		"",
+	)
+	lines = appendCountMap(lines, run.NotIndexedReasons)
+	lines = append(lines, "", "## Failure Reasons", "")
+	lines = appendCountMap(lines, run.FailureReasons)
+	lines = append(lines, "", "## Warnings", "")
+	if len(run.Warnings) == 0 {
+		lines = append(lines, "- none")
+	} else {
+		for _, warning := range run.Warnings {
+			lines = append(lines, "- "+warning)
+		}
+	}
+	lines = append(lines, "", "## Covered Folders", "")
+	if len(run.CoveredFolders) == 0 {
+		lines = append(lines, "- none")
+	} else {
+		for _, folder := range run.CoveredFolders {
+			lines = append(lines, "- "+folder)
+		}
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func appendCountMap(lines []string, counts map[string]int) []string {
+	if len(counts) == 0 {
+		return append(lines, "- none")
+	}
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		lines = append(lines, fmt.Sprintf("- %s: %d", key, counts[key]))
+	}
+	return lines
+}
+
+func stringListText(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	return "[" + strings.Join(values, ", ") + "]"
+}
+
+func elapsedText(startedAt, finishedAt string) string {
+	started, startErr := time.Parse(time.RFC3339, startedAt)
+	finished, finishErr := time.Parse(time.RFC3339, finishedAt)
+	if startErr != nil || finishErr != nil {
+		return "unavailable"
+	}
+	return finished.Sub(started).String()
+}
+
 func renderIndexText(result *index.PathIndexTree) string {
 	var lines []string
 	var walk func(node index.IndexedPathNode, depth int)
@@ -1129,7 +1348,7 @@ File content:
 %s`, length, focusInstruction, sourcePath, content)
 }
 
-func buildLLMSummarizer(storePath string) index.SummarizerFunc {
+func buildLLMSummarizer(storePath string, usage *tokenUsageTracker) index.SummarizerFunc {
 	resolved, err := config.Resolve(storePath, config.ResolveOptions{}, nil)
 	if err != nil {
 		return nil
@@ -1144,6 +1363,7 @@ func buildLLMSummarizer(storePath string) index.SummarizerFunc {
 		if err != nil {
 			return "", err
 		}
+		usage.note(resolved.LLM.Provider, resolved.LLM.Model, response.Usage)
 		return response.Text, nil
 	}
 }

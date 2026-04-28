@@ -411,7 +411,7 @@ func TestBuildReusesUnchangedFileMetadata(t *testing.T) {
 	}
 
 	calls = 0
-	_, err = Build(Options{
+	result, err := Build(Options{
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
@@ -425,6 +425,9 @@ func TestBuildReusesUnchangedFileMetadata(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("expected unchanged file to reuse metadata without summarizer call, got %d", calls)
+	}
+	if result.Run == nil || result.Run.TotalDiscoveredFiles != 1 || result.Run.UnchangedSkippedFiles != 1 || result.Run.SummarizedFiles != 0 {
+		t.Fatalf("expected unchanged reuse stats, got %#v", result.Run)
 	}
 
 	meta := readMetadataFile(t, root)

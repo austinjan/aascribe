@@ -171,9 +171,12 @@ When a file is summarizable:
 ```json
 {
   "root": "/abs/path/to/indexed/root",
+  "report_path": "/abs/path/to/data/report/2026-04-03-101233-indexing-report.md",
   "tree": { IndexedPathNode }
 }
 ```
+
+`report_path` is present after a successful CLI `index` run. It points to the durable Markdown completion report written under the report directory adjacent to the active memory store, which is `data/report/` for the default `data/memory` store.
 
 ### 5.2 `IndexedPathNode`
 
@@ -330,6 +333,8 @@ CLI text output:
 ## 10. Rendering
 
 `renderIndexText` in `internal/command/command.go` turns `PathIndexTree` into an indented, depth-prefixed text tree. Directory rows get a trailing `/`; rows with a summary append ` - <summary>`. This is the text returned when the CLI is invoked with `--format text`; JSON output is the full `PathIndexTree` structure.
+
+After a successful sync or async `index` job, the CLI writes a Markdown completion report named `<yyyy-mm-dd-HHMMSS>-indexing-report.md` under the report directory adjacent to the active memory store. With the default store, this is `data/report/`. The report includes file counts, unchanged skipped count, token usage when available, covered folders, effective options, metadata count, warning details, not-indexed reasons, and failure reasons.
 
 ## 11. Error codes (via `internal/apperr`)
 
