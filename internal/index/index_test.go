@@ -232,10 +232,55 @@ func TestBuildMetadataTracksNoSummaryAndSizeLimits(t *testing.T) {
 	if len(meta.NotIndexedFiles) != 2 {
 		t.Fatalf("expected both files to be marked not indexed in no-summary mode, got %#v", meta.NotIndexedFiles)
 	}
+	for _, file := range meta.Files {
+		if file.Summary != "" || file.SummarizedAt != "" {
+			t.Fatalf("expected no summary fields in no-summary metadata, got %#v", file)
+		}
+	}
 	for _, entry := range meta.NotIndexedFiles {
 		if entry.Reason != "no_summary_mode" {
 			t.Fatalf("expected no_summary_mode reason, got %#v", entry)
 		}
+	}
+}
+
+func TestBuildRegeneratesSummaryAfterNoSummaryMetadata(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "notes.txt"), "hello world\n")
+
+	_, err := Build(Options{
+		Root:        root,
+		Depth:       1,
+		NoSummary:   true,
+		MaxFileSize: 1024,
+	})
+	if err != nil {
+		t.Fatalf("expected no-summary build success, got %v", err)
+	}
+
+	calls := 0
+	result, err := Build(Options{
+		Root:        root,
+		Depth:       1,
+		MaxFileSize: 1024,
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
+			calls++
+			return "fresh summary", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected summary build success, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected summary to regenerate after no-summary metadata, got %d calls", calls)
+	}
+	if len(result.Tree.Children) != 1 || result.Tree.Children[0].Summary != "fresh summary" {
+		t.Fatalf("expected regenerated summary in tree, got %#v", result.Tree.Children)
+	}
+
+	meta := readMetadataFile(t, root)
+	if len(meta.Files) != 1 || meta.Files[0].Status != "ok" || meta.Files[0].Summary != "fresh summary" {
+		t.Fatalf("expected regenerated summary metadata, got %#v", meta.Files)
 	}
 }
 
@@ -1140,6 +1185,68 @@ func TestBuildFixtureIteratesThreeLevelsAndRespectsDepth(t *testing.T) {
 	limitedDocs := requireChildByBase(t, limited.Tree, "docs")
 	if hasChildBase(limitedDocs, "level1") {
 		t.Fatalf("expected level1 to be omitted at depth 1, got %#v", limitedDocs.Children)
+	}
+}
+
+func TestBuildTreatsSymlinkToDirectoryAsDirectory(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, ".agents", "skills", "adapt")
+	mustWriteFile(t, filepath.Join(targetDir, "SKILL.md"), "# Adapt\n\nSkill text.\n")
+	linkParent := filepath.Join(root, ".claude", "skills")
+	if err := os.MkdirAll(linkParent, 0o755); err != nil {
+		t.Fatalf("failed to create link parent: %v", err)
+	}
+	if err := os.Symlink(filepath.Join("..", "..", ".agents", "skills", "adapt"), filepath.Join(linkParent, "adapt")); err != nil {
+		t.Skipf("symlink not available: %v", err)
+	}
+
+	result, err := Build(Options{
+		Root:      root,
+		Depth:     8,
+		NoSummary: true,
+	})
+	if err != nil {
+		t.Fatalf("expected build success, got %v", err)
+	}
+
+	claude := requireChildByBase(t, result.Tree, ".claude")
+	skills := requireChildByBase(t, claude, "skills")
+	if !hasChildBase(skills, "adapt") {
+		meta := readMetadataFile(t, filepath.Join(root, ".claude", "skills"))
+		t.Fatalf("expected child adapt in %#v; metadata failures=%#v", skills.Children, meta.FailedFiles)
+	}
+	adapt := requireChildByBase(t, skills, "adapt")
+	if adapt.Type != "dir" {
+		t.Fatalf("expected symlink target to be indexed as directory, got %#v", adapt)
+	}
+	if !hasChildBase(adapt, "SKILL.md") {
+		t.Fatalf("expected symlink directory contents to be indexed, got %#v", adapt.Children)
+	}
+
+	meta := readMetadataFile(t, filepath.Join(root, ".claude", "skills"))
+	if len(meta.FailedFiles) != 0 {
+		t.Fatalf("expected no failed files for symlink directories, got %#v", meta.FailedFiles)
+	}
+}
+
+func TestBuildIgnoresMetadataTempArtifacts(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "notes.txt"), "hello\n")
+	mustWriteFile(t, filepath.Join(root, metadataFilename+".12345.tmp"), "partial metadata\n")
+
+	result, err := Build(Options{
+		Root:      root,
+		NoSummary: true,
+	})
+	if err != nil {
+		t.Fatalf("expected build success, got %v", err)
+	}
+	if hasChildBase(result.Tree, metadataFilename+".12345.tmp") {
+		t.Fatalf("expected metadata temp file to be ignored, got %#v", result.Tree.Children)
+	}
+	meta := readMetadataFile(t, root)
+	if len(meta.FailedFiles) != 0 {
+		t.Fatalf("expected no failed files for metadata temp artifact, got %#v", meta.FailedFiles)
 	}
 }
 

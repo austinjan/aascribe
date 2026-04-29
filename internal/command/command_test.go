@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/austinjan/aascribe/internal/cli"
 	"github.com/austinjan/aascribe/internal/config"
@@ -151,6 +152,51 @@ timeout_seconds = 30
 	}
 }
 
+func TestRunIndexRequiresLLMWhenSummaryEnabled(t *testing.T) {
+	storePath := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello world\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	_, err := runIndex(storePath, cli.IndexCommand{
+		Path:        root,
+		Depth:       1,
+		MaxFileSize: 1024,
+	})
+	if err == nil {
+		t.Fatalf("expected missing LLM config error")
+	}
+	if !strings.Contains(err.Error(), "No config file") && !strings.Contains(err.Error(), "Invalid config") && !strings.Contains(err.Error(), "Environment variable") {
+		t.Fatalf("expected LLM config or secret error, got %v", err)
+	}
+}
+
+func TestRunIndexBaseOnlyDoesNotRequireLLM(t *testing.T) {
+	storePath := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello world\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	result, err := runIndex(storePath, cli.IndexCommand{
+		Path:              root,
+		Depth:             1,
+		MaxFileSize:       1024,
+		NoMetadataMethods: true,
+	})
+	if err != nil {
+		t.Fatalf("expected base-only index success, got %v", err)
+	}
+	tree, ok := result.Data.(*index.PathIndexTree)
+	if !ok {
+		t.Fatalf("expected PathIndexTree, got %T", result.Data)
+	}
+	if len(tree.Tree.Children) != 1 || tree.Tree.Children[0].Summary != "" {
+		t.Fatalf("expected base-only index without summary, got %#v", tree.Tree.Children)
+	}
+}
+
 func TestRunIndexAsyncCreatesOperationAndStartsWorker(t *testing.T) {
 	storePath := t.TempDir()
 	root := t.TempDir()
@@ -199,6 +245,63 @@ func TestRunIndexAsyncCreatesOperationAndStartsWorker(t *testing.T) {
 	}
 	if status.State != operation.StatePending || status.Stage != "queued" {
 		t.Fatalf("unexpected initial async status: %#v", status)
+	}
+}
+
+func TestIndexArgsPreservesMetadataMethodFlags(t *testing.T) {
+	args := indexArgs(cli.IndexCommand{
+		Path:            "./tests",
+		Depth:           2,
+		Concurrency:     4,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{"summary"},
+	})
+	rendered := strings.Join(args, " ")
+	if !strings.Contains(rendered, "--metadata-method summary") {
+		t.Fatalf("expected metadata method flag in args, got %#v", args)
+	}
+	if args[len(args)-1] != "./tests" {
+		t.Fatalf("expected path to remain last, got %#v", args)
+	}
+}
+
+func TestIndexArgsPreservesNoMetadataMethodsFlag(t *testing.T) {
+	args := indexArgs(cli.IndexCommand{
+		Path:              "./tests",
+		Depth:             2,
+		Concurrency:       4,
+		MaxFileSize:       1024,
+		NoMetadataMethods: true,
+	})
+	rendered := strings.Join(args, " ")
+	if !strings.Contains(rendered, "--no-metadata-methods") {
+		t.Fatalf("expected no metadata methods flag in args, got %#v", args)
+	}
+	if args[len(args)-1] != "./tests" {
+		t.Fatalf("expected path to remain last, got %#v", args)
+	}
+}
+
+func TestCreateIndexReportFileAvoidsSameSecondCollision(t *testing.T) {
+	reportDir := t.TempDir()
+	finishedAt := time.Date(2026, 4, 29, 3, 3, 31, 0, time.UTC)
+
+	first, firstFile, err := createIndexReportFile(reportDir, finishedAt)
+	if err != nil {
+		t.Fatalf("create first report: %v", err)
+	}
+	defer firstFile.Close()
+	if filepath.Base(first) != "2026-04-29-030331-indexing-report.md" {
+		t.Fatalf("unexpected first report path: %s", first)
+	}
+
+	second, secondFile, err := createIndexReportFile(reportDir, finishedAt)
+	if err != nil {
+		t.Fatalf("create second report: %v", err)
+	}
+	defer secondFile.Close()
+	if filepath.Base(second) != "2026-04-29-030331-2-indexing-report.md" {
+		t.Fatalf("unexpected second report path: %s", second)
 	}
 }
 

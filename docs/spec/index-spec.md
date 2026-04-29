@@ -23,6 +23,8 @@ aascribe index <path>
   [--async]
   [--refresh]
   [--no-summary]
+  [--metadata-method <method>]...
+  [--no-metadata-methods]
   [--max-file-size <bytes>]
 ```
 
@@ -35,9 +37,20 @@ aascribe index <path>
 | `--async`         | bool       | `false`     | Start indexing as a persisted operation and return `OperationAccepted`.   |
 | `--refresh`       | bool       | `false`     | Reserved for incremental re-indexing. Accepted but not yet consumed.     |
 | `--no-summary`    | bool       | `false`     | Skip all summarization. Files are still walked, hashed, and recorded.    |
+| `--metadata-method` | string (×N) | default set | Select explicit metadata methods. Supported first methods: `base`, `summary`. |
+| `--no-metadata-methods` | bool | `false` | Disable optional/default methods beyond required base metadata. |
 | `--max-file-size` | int64      | `1_048_576` | Byte ceiling for summarization. `0` is valid; negative is rejected.      |
 
 Exactly one positional path argument is required. Zero or multiple positional args return a parse error.
+
+Metadata method selection:
+
+- With no metadata method flags, `index` uses the default method set: `base` plus `summary`.
+- `base` is required and always runs because it records path, size, mod time, content hash, file type, status, skip reason, and error state.
+- `summary` runs by default and requires a configured LLM provider. If LLM config or the configured API-key environment variable is unavailable, summary-enabled indexing fails instead of using a local fake summary.
+- `summary` is disabled by `--no-summary`, `--no-metadata-methods`, or by an explicit metadata method list that omits `summary`.
+- When one or more `--metadata-method` flags are provided, `index` uses the requested method set plus required `base`.
+- `--metadata-method` and `--no-metadata-methods` are mutually exclusive.
 
 When `--async` is set, the parent command creates a persisted operation under the active store, starts a background index worker process, and returns an `OperationAccepted` payload. The worker writes lifecycle snapshots to `<store>/operations/<operation-id>/operation.json`, event history to `events.jsonl`, and the final `PathIndexTree` result to `result.json`.
 

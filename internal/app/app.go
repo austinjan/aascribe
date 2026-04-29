@@ -3,11 +3,13 @@ package app
 import (
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/austinjan/aascribe/internal/apperr"
 	"github.com/austinjan/aascribe/internal/cli"
 	"github.com/austinjan/aascribe/internal/command"
+	"github.com/austinjan/aascribe/internal/config"
 	"github.com/austinjan/aascribe/internal/logging"
 	"github.com/austinjan/aascribe/internal/output"
 	"github.com/austinjan/aascribe/internal/store"
@@ -59,6 +61,15 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		_ = output.WriteError(stdout, parsed.Format, parsed.Quiet, err, parsed.Command.Name(), started, unresolvedStore(parsed.Store))
 		return normalizedStatus(err)
 	}
+	if parsed.Command.Name() != "init" {
+		if err := ensureStoreForCommand(storePath); err != nil {
+			logger := logging.New(stderr, "", parsed.Verbose)
+			defer logger.Close()
+			logger.Error("failed to initialize missing store", "command", parsed.Command.Name(), "store", storePath, "error_code", output.ErrorCode(err), "error_message", err.Error())
+			_ = output.WriteError(stdout, parsed.Format, parsed.Quiet, err, parsed.Command.Name(), started, storePath)
+			return normalizedStatus(err)
+		}
+	}
 
 	logStorePath := storePath
 	if parsed.Command.Name() == "logs" || parsed.Command.Name() == "init" {
@@ -83,6 +94,26 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	logger.Info("command finished", "command", parsed.Command.Name(), "store", storePath, "status", "ok", "duration_ms", time.Since(started).Milliseconds())
 	return apperr.ExitSuccess.Code()
+}
+
+func ensureStoreForCommand(storePath string) error {
+	storeExists := false
+	if _, err := os.Stat(storePath); err == nil {
+		storeExists = true
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	configExists := false
+	if _, err := os.Stat(config.ConfigPath(storePath)); err == nil {
+		configExists = true
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if storeExists && configExists {
+		return nil
+	}
+	_, err := store.InitializeStore(storePath, false)
+	return err
 }
 
 func normalizedStatus(err error) int {

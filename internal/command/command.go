@@ -80,6 +80,8 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 	switch cmd := command.(type) {
 	case cli.InitCommand:
 		return runInit(storePath, cmd.Force)
+	case cli.ConfigSetCommand:
+		return runConfigSet(storePath, cmd)
 	case cli.LogsPathCommand:
 		return runLogsPath(storePath), nil
 	case cli.LogsExportCommand:
@@ -158,7 +160,15 @@ func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, er
 		return runIndexAsync(storePath, cmd)
 	}
 	usage := &tokenUsageTracker{}
-	summarizer := buildLLMSummarizer(storePath, usage)
+	noSummary := cmd.EffectiveNoSummary()
+	var summarizer index.SummarizerFunc
+	if !noSummary {
+		var err error
+		summarizer, err = buildRequiredLLMSummarizer(storePath, usage)
+		if err != nil {
+			return nil, err
+		}
+	}
 	result, err := index.Build(index.Options{
 		Root:                cmd.Path,
 		Depth:               cmd.Depth,
@@ -166,7 +176,7 @@ func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, er
 		Exclude:             cmd.Exclude,
 		MaxConcurrency:      cmd.Concurrency,
 		Refresh:             cmd.Refresh,
-		NoSummary:           cmd.NoSummary,
+		NoSummary:           noSummary,
 		MaxFileSize:         cmd.MaxFileSize,
 		Summarizer:          summarizer,
 		FailureNoticeWriter: os.Stderr,
@@ -265,6 +275,12 @@ func indexArgs(cmd cli.IndexCommand) []string {
 	if cmd.NoSummary {
 		args = append(args, "--no-summary")
 	}
+	for _, method := range cmd.MetadataMethods {
+		args = append(args, "--metadata-method", method)
+	}
+	if cmd.NoMetadataMethods {
+		args = append(args, "--no-metadata-methods")
+	}
 	args = append(args, cmd.Path)
 	return args
 }
@@ -297,19 +313,31 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 	defer stopCancelWatch()
 
 	usage := &tokenUsageTracker{}
-	result, err := index.Build(index.Options{
-		Context:             ctx,
-		Root:                cmd.Path,
-		Depth:               cmd.Depth,
-		Include:             cmd.Include,
-		Exclude:             cmd.Exclude,
-		MaxConcurrency:      cmd.Concurrency,
-		Refresh:             cmd.Refresh,
-		NoSummary:           cmd.NoSummary,
-		MaxFileSize:         cmd.MaxFileSize,
-		Summarizer:          buildLLMSummarizer(storePath, usage),
-		FailureNoticeWriter: io.Discard,
-	})
+	noSummary := cmd.EffectiveNoSummary()
+	var summarizer index.SummarizerFunc
+	var summarizerErr error
+	if !noSummary {
+		summarizer, summarizerErr = buildRequiredLLMSummarizer(storePath, usage)
+	}
+	var result *index.PathIndexTree
+	var buildErr error
+	if summarizerErr != nil {
+		buildErr = summarizerErr
+	} else {
+		result, buildErr = index.Build(index.Options{
+			Context:             ctx,
+			Root:                cmd.Path,
+			Depth:               cmd.Depth,
+			Include:             cmd.Include,
+			Exclude:             cmd.Exclude,
+			MaxConcurrency:      cmd.Concurrency,
+			Refresh:             cmd.Refresh,
+			NoSummary:           noSummary,
+			MaxFileSize:         cmd.MaxFileSize,
+			Summarizer:          summarizer,
+			FailureNoticeWriter: io.Discard,
+		})
+	}
 
 	current, loadErr := operation.LoadStatus(storePath, operationID)
 	if loadErr != nil {
@@ -320,14 +348,14 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err != nil {
+	if buildErr != nil {
 		current.State = operation.StateFailed
 		current.Stage = "failed"
-		current.Message = err.Error()
+		current.Message = buildErr.Error()
 		current.UpdatedAt = now
 		current.CompletedAt = now
 		current.ResultReady = true
-		current.Error = &operation.ErrorDetail{Code: output.ErrorCode(err), Message: err.Error()}
+		current.Error = &operation.ErrorDetail{Code: output.ErrorCode(buildErr), Message: buildErr.Error()}
 		if saveErr := operation.SaveStatus(storePath, current); saveErr != nil {
 			return nil, saveErr
 		}
@@ -340,8 +368,8 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 		}); saveErr != nil {
 			return nil, saveErr
 		}
-		_ = reporter.Report(operation.Report{Stage: "failed", Message: err.Error(), Level: "error"})
-		return nil, err
+		_ = reporter.Report(operation.Report{Stage: "failed", Message: buildErr.Error(), Level: "error"})
+		return nil, buildErr
 	}
 
 	reportPath, err := writeIndexCompletionReport(storePath, cmd, result, operationID, "async", usage.snapshot())
@@ -589,6 +617,71 @@ func runInit(storePath string, force bool) (*output.CommandResult, error) {
 		},
 		Text: text,
 	}, nil
+}
+
+func runConfigSet(storePath string, cmd cli.ConfigSetCommand) (*output.CommandResult, error) {
+	if _, err := store.InitializeStore(storePath, false); err != nil {
+		if appErr, ok := err.(*apperr.Error); !ok || appErr.Code != "STORE_ALREADY_EXISTS" {
+			return nil, err
+		}
+	}
+	envPath := filepath.Join(config.ConfigDir(storePath), ".env")
+	envName := ""
+	switch cmd.Key {
+	case "gemini_api_key":
+		envName = "GEMINI_API_KEY"
+	default:
+		return nil, apperr.InvalidArguments("Unsupported config key: %s.", cmd.Key)
+	}
+	if err := upsertDotEnvValue(envPath, envName, cmd.Value); err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: map[string]any{
+			"config_path": config.ConfigPath(storePath),
+			"env_path":    envPath,
+			"key":         cmd.Key,
+			"env_name":    envName,
+			"updated":     true,
+		},
+		Text: fmt.Sprintf("Updated %s in %s\nnext: aascribe index <path>", cmd.Key, envPath),
+	}, nil
+}
+
+func upsertDotEnvValue(path, key, value string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return apperr.IOError("Failed to create config directory: %s.", filepath.Dir(path))
+	}
+	lines := []string{}
+	if content, err := os.ReadFile(path); err == nil {
+		lines = strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
+	} else if !os.IsNotExist(err) {
+		return apperr.IOError("Failed to read config env file: %s.", path)
+	}
+	replacement := key + "=" + value
+	updated := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, key+"=") {
+			lines[i] = replacement
+			updated = true
+		}
+	}
+	if !updated {
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines[len(lines)-1] = replacement
+		} else {
+			lines = append(lines, replacement)
+		}
+	}
+	content := strings.Join(lines, "\n")
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return apperr.IOError("Failed to write config env file: %s.", path)
+	}
+	return nil
 }
 
 func runOperationList(storePath string) (*output.CommandResult, error) {
@@ -1057,12 +1150,34 @@ func writeIndexCompletionReport(storePath string, cmd cli.IndexCommand, result *
 	if err != nil {
 		finishedAt = time.Now().UTC()
 	}
-	reportPath := filepath.Join(reportDir, finishedAt.UTC().Format("2006-01-02-150405")+"-indexing-report.md")
+	reportPath, reportFile, err := createIndexReportFile(reportDir, finishedAt.UTC())
+	if err != nil {
+		return "", err
+	}
+	defer reportFile.Close()
 	content := renderIndexCompletionReport(cmd, result, operationID, mode, usage, reportPath)
-	if err := os.WriteFile(reportPath, []byte(content), 0o644); err != nil {
+	if _, err := reportFile.WriteString(content); err != nil {
 		return "", apperr.IOError("Failed to write index report: %s.", reportPath)
 	}
 	return reportPath, nil
+}
+
+func createIndexReportFile(reportDir string, finishedAt time.Time) (string, *os.File, error) {
+	stem := finishedAt.Format("2006-01-02-150405")
+	for i := 1; ; i++ {
+		filename := stem + "-indexing-report.md"
+		if i > 1 {
+			filename = fmt.Sprintf("%s-%d-indexing-report.md", stem, i)
+		}
+		reportPath := filepath.Join(reportDir, filename)
+		reportFile, err := os.OpenFile(reportPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			return reportPath, reportFile, nil
+		}
+		if !os.IsExist(err) {
+			return "", nil, apperr.IOError("Failed to write index report: %s.", reportPath)
+		}
+	}
 }
 
 func renderIndexCompletionReport(cmd cli.IndexCommand, result *index.PathIndexTree, operationID, mode string, usage tokenUsageSnapshot, reportPath string) string {
@@ -1121,7 +1236,8 @@ func renderIndexCompletionReport(cmd cli.IndexCommand, result *index.PathIndexTr
 		"- include: "+stringListText(cmd.Include),
 		"- exclude: "+stringListText(cmd.Exclude),
 		fmt.Sprintf("- refresh: %t", cmd.Refresh),
-		fmt.Sprintf("- no_summary: %t", cmd.NoSummary),
+		fmt.Sprintf("- no_summary: %t", cmd.EffectiveNoSummary()),
+		"- metadata_methods: "+stringListText(cmd.EffectiveMetadataMethods()),
 		fmt.Sprintf("- max_file_size: %d", cmd.MaxFileSize),
 		fmt.Sprintf("- concurrency: %d", cmd.Concurrency),
 		"",
@@ -1353,6 +1469,18 @@ func buildLLMSummarizer(storePath string, usage *tokenUsageTracker) index.Summar
 	if err != nil {
 		return nil
 	}
+	return llmSummarizer(resolved, usage)
+}
+
+func buildRequiredLLMSummarizer(storePath string, usage *tokenUsageTracker) (index.SummarizerFunc, error) {
+	resolved, err := config.Resolve(storePath, config.ResolveOptions{}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return llmSummarizer(resolved, usage), nil
+}
+
+func llmSummarizer(resolved *config.Resolved, usage *tokenUsageTracker) index.SummarizerFunc {
 	return func(ctx context.Context, path, content, length, focus string) (string, error) {
 		if ctx != nil {
 			if err := ctx.Err(); err != nil {
@@ -1363,7 +1491,9 @@ func buildLLMSummarizer(storePath string, usage *tokenUsageTracker) index.Summar
 		if err != nil {
 			return "", err
 		}
-		usage.note(resolved.LLM.Provider, resolved.LLM.Model, response.Usage)
+		if usage != nil {
+			usage.note(resolved.LLM.Provider, resolved.LLM.Model, response.Usage)
+		}
 		return response.Text, nil
 	}
 }

@@ -14,6 +14,7 @@ Complete command and flag reference for `aascribe`.
 - [Exit codes](#exit-codes)
 - [Commands](#commands)
   - [init](#init)
+  - [config](#config)
   - [logs](#logs)
   - [operation](#operation)
   - [index](#index)
@@ -80,8 +81,8 @@ On error:
 {
   "ok": false,
   "error": {
-    "code": "STORE_NOT_FOUND",
-    "message": "No store at /path/to/project/data/memory. Run `aascribe init`."
+    "code": "MISSING_SECRET",
+    "message": "Environment variable GEMINI_API_KEY is not set or is empty."
   },
   "meta": { ... }
 }
@@ -108,6 +109,7 @@ On error:
 Create a new store. Sets up a filesystem-first directory layout for short-term memory, long-term memory, index data, cache data, output transport data, and layout metadata.
 Also creates a safe default `config.toml` template in the sibling `data/config/` directory when one does not already exist.
 The template stores the API key environment variable name, not the secret itself.
+Commands that need the store create the default store and config skeleton automatically when the store is missing. Run `init` explicitly when you want to inspect or repair setup before another command.
 
 ```
 aascribe init [--store <path>] [--force]
@@ -157,6 +159,21 @@ OutputShape: StoreInitResult
   }
 }
 ```
+
+---
+
+### `config`
+
+Set required local configuration values for the active store. If the store does not exist yet, `config` creates the default store and config skeleton first.
+
+```bash
+aascribe config gemini_api_key=<key>
+aascribe --store ./project-mem config gemini_api_key=<key>
+```
+
+The config skeleton only contains non-secret settings such as provider, model, `api_key_env`, and timeout. The Gemini API key is required for summary-backed `index` and other LLM-backed commands, has no default, and must be supplied by the user.
+
+The key is written to `data/config/.env` as `GEMINI_API_KEY` and is not echoed back in command output.
 
 ---
 
@@ -325,6 +342,8 @@ aascribe index eval <path>
 | `--async` | off | Start indexing as a persisted operation and return an `operation_id` immediately |
 | `--refresh` | off | Ignore cache; regenerate summaries |
 | `--no-summary` | off | Return structure only. Much faster |
+| `--metadata-method <method>` | default set | Select explicit metadata methods. Repeatable. Current methods: `base`, `summary` |
+| `--no-metadata-methods` | off | Disable optional/default methods beyond required base metadata |
 | `--max-file-size <bytes>` | `1048576` | Files over this size get metadata only, no summary |
 
 Behavior notes:
@@ -332,6 +351,10 @@ Behavior notes:
 - `index` treats `.gitignore` and `.aaignore` as folder-scoped blacklist exclude files during traversal.
 - Text-file detection is content-based, not extension-based.
 - `index` writes `.aascribe_index_meta.json` files in indexed directories.
+- With no metadata method flags, `index` uses the default method set: required `base` metadata plus `summary`.
+- If `--metadata-method` flags are provided, `index` uses those methods plus required `base`.
+- `--no-metadata-methods` keeps only required `base` metadata.
+- `summary` is LLM-backed. If LLM config or the configured API-key environment variable is missing, summary-enabled indexing returns an error instead of using a local fallback summary.
 - Successful sync and async `index` jobs also write a Markdown completion report under `data/report/` when using the default `data/memory` store.
 - Each `.aascribe_index_meta.json` is local-only: it describes the current folder and its direct files, not a full descendant tree.
 - Metadata records persisted file descriptions, non-indexed files, failures, and warnings.
@@ -348,6 +371,7 @@ aascribe index --depth 2 --include '*.rs' --include '*.toml' ./src
 aascribe index --concurrency 8 ./src
 aascribe index --async ./src
 aascribe index --no-summary .           # structure-only, fast
+aascribe index --metadata-method summary .
 aascribe index --refresh .              # force re-summarize
 aascribe index dirty ./src              # mark existing metadata stale
 aascribe index eval ./src               # preview changed vs unchanged work

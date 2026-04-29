@@ -37,6 +37,13 @@ type InitCommand struct {
 
 func (c InitCommand) Name() string { return "init" }
 
+type ConfigSetCommand struct {
+	Key   string
+	Value string
+}
+
+func (c ConfigSetCommand) Name() string { return "config" }
+
 type LogsPathCommand struct{}
 
 func (c LogsPathCommand) Name() string { return "logs" }
@@ -100,18 +107,64 @@ type OutputGenerateCommand struct {
 func (c OutputGenerateCommand) Name() string { return "output" }
 
 type IndexCommand struct {
-	Path        string
-	Depth       int
-	Include     []string
-	Exclude     []string
-	Concurrency int
-	Async       bool
-	Refresh     bool
-	NoSummary   bool
-	MaxFileSize int64
+	Path              string
+	Depth             int
+	Include           []string
+	Exclude           []string
+	Concurrency       int
+	Async             bool
+	Refresh           bool
+	NoSummary         bool
+	MaxFileSize       int64
+	MetadataMethods   []string
+	NoMetadataMethods bool
 }
 
 func (c IndexCommand) Name() string { return "index" }
+
+const (
+	MetadataMethodBase    = "base"
+	MetadataMethodSummary = "summary"
+)
+
+func (c IndexCommand) EffectiveMetadataMethods() []string {
+	seen := map[string]bool{}
+	methods := []string{}
+	add := func(method string) {
+		if method == "" || seen[method] {
+			return
+		}
+		seen[method] = true
+		methods = append(methods, method)
+	}
+
+	add(MetadataMethodBase)
+	if c.NoMetadataMethods {
+		return methods
+	}
+	if len(c.MetadataMethods) == 0 {
+		if !c.NoSummary {
+			add(MetadataMethodSummary)
+		}
+		return methods
+	}
+	for _, method := range c.MetadataMethods {
+		if method == MetadataMethodSummary && c.NoSummary {
+			continue
+		}
+		add(method)
+	}
+	return methods
+}
+
+func (c IndexCommand) EffectiveNoSummary() bool {
+	for _, method := range c.EffectiveMetadataMethods() {
+		if method == MetadataMethodSummary {
+			return false
+		}
+	}
+	return true
+}
 
 type IndexCleanCommand struct {
 	Path   string
@@ -337,6 +390,7 @@ Global flags:
 
 Commands:
   init         Create or reinitialize the local memory store layout
+  config       Set local config values such as the Gemini API key
   logs         Inspect, export, or clear aascribe logs
   output       Browse stored oversized outputs for LLM-safe continuation
   operation    Inspect persisted long-running operation state
@@ -365,6 +419,7 @@ Main Flows:
 Current Implementation Status:
   Working now:
     init
+    config
     logs path
     logs export
     logs clear
@@ -424,6 +479,31 @@ What To Do Next:
   Run aascribe logs path to confirm the active log file
   Use aascribe --help to see the full command surface
   Read docs/USAGE.md for the longer command reference
+`)
+	case "config":
+		return strings.TrimSpace(`
+aascribe config - set local configuration values
+
+Purpose:
+  Update local store configuration needed by LLM-backed commands.
+
+Usage:
+  aascribe config gemini_api_key=<key>
+  aascribe --store ./project-mem config gemini_api_key=<key>
+
+Behavior:
+  Creates the default store and config skeleton if they do not exist.
+  The skeleton defines non-secret LLM settings: provider, model, api_key_env, timeout_seconds.
+  The Gemini API key is required for summary-backed index, has no default, and must be set by the user.
+  Writes the Gemini key to data/config/.env as GEMINI_API_KEY without echoing the secret value.
+
+Examples:
+  aascribe config gemini_api_key=xxxxxxxxxxxx
+  cat ./data/config/config.toml
+  aascribe index ./docs
+
+Next Steps:
+  Run an LLM-backed command such as aascribe index <path>, chat, describe, or summarize.
 `)
 	case "logs":
 		return strings.TrimSpace(`
@@ -709,7 +789,7 @@ Purpose:
   Prepare repository content for faster later retrieval by walking one directory tree, summarizing direct files per folder, and recording local-only index metadata.
 
 Usage:
-  aascribe index <path> [--depth <n>] [--include <glob>] [--exclude <glob>] [--refresh] [--no-summary] [--max-file-size <bytes>]
+  aascribe index <path> [--depth <n>] [--include <glob>] [--exclude <glob>] [--refresh] [--no-summary] [--metadata-method <method>] [--no-metadata-methods] [--max-file-size <bytes>]
   aascribe index dirty <path>
   aascribe index eval <path>
   aascribe index clean <path> [--dry-run] --force
@@ -718,6 +798,8 @@ Behavior:
   Treat .gitignore and .aaignore in each visited folder as blacklist exclude files during traversal.
   Detect text files from file content instead of filename extension.
   Write .aascribe_index_meta.json in each indexed folder with local-only metadata for that folder.
+  With no metadata method flags, use the default methods: base metadata plus summary.
+  Supported methods in this build are base and summary. Base metadata always runs.
   Use --concurrency to bound direct-file processing across the whole index run.
   Use --async to start index as an operation and inspect it later with operation status/events/result.
   Use index dirty to mark existing metadata stale so the next index run rebuilds it.
@@ -1127,6 +1209,8 @@ func parseSubcommand(name string, args []string) (Command, error) {
 	switch name {
 	case "init":
 		return parseInit(args)
+	case "config":
+		return parseConfig(args)
 	case "logs":
 		return parseLogs(args)
 	case "output":
@@ -1160,6 +1244,21 @@ func parseSubcommand(name string, args []string) (Command, error) {
 	default:
 		return nil, newUnknownCommandError(name)
 	}
+}
+
+func parseConfig(args []string) (Command, error) {
+	if len(args) != 1 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "config", "assignment", "config requires exactly one assignment, such as gemini_api_key=...")
+	}
+	key, value, ok := strings.Cut(args[0], "=")
+	if !ok || strings.TrimSpace(key) == "" || value == "" {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "config", "assignment", "Invalid config assignment: %s.", args[0])
+	}
+	key = strings.TrimSpace(key)
+	if key != "gemini_api_key" {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "config", "assignment", "Unsupported config key: %s.", key)
+	}
+	return ConfigSetCommand{Key: key, Value: value}, nil
 }
 
 func parseLogs(args []string) (Command, error) {
@@ -1393,13 +1492,16 @@ func parseIndex(args []string) (Command, error) {
 	cmd.MaxFileSize = 1_048_576
 	var include stringSlice
 	var exclude stringSlice
+	var metadataMethods stringSlice
 	fs.IntVar(&cmd.Depth, "depth", 3, "")
 	fs.Var(&include, "include", "")
 	fs.Var(&exclude, "exclude", "")
+	fs.Var(&metadataMethods, "metadata-method", "")
 	fs.IntVar(&cmd.Concurrency, "concurrency", 4, "")
 	fs.BoolVar(&cmd.Async, "async", false, "")
 	fs.BoolVar(&cmd.Refresh, "refresh", false, "")
 	fs.BoolVar(&cmd.NoSummary, "no-summary", false, "")
+	fs.BoolVar(&cmd.NoMetadataMethods, "no-metadata-methods", false, "")
 	fs.Int64Var(&cmd.MaxFileSize, "max-file-size", 1_048_576, "")
 	if err := parseFlags(fs, args); err != nil {
 		return nil, err
@@ -1410,9 +1512,18 @@ func parseIndex(args []string) (Command, error) {
 	if cmd.Concurrency <= 0 {
 		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--concurrency", "Invalid value for --concurrency: %d.", cmd.Concurrency)
 	}
+	if cmd.NoMetadataMethods && len(metadataMethods) > 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--metadata-method", "--metadata-method cannot be used with --no-metadata-methods.")
+	}
+	for _, method := range metadataMethods {
+		if !oneOf(method, MetadataMethodBase, MetadataMethodSummary) {
+			return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--metadata-method", "Unsupported metadata method: %s.", method)
+		}
+	}
 	cmd.Path = fs.Args()[0]
 	cmd.Include = include
 	cmd.Exclude = exclude
+	cmd.MetadataMethods = metadataMethods
 	return cmd, nil
 }
 

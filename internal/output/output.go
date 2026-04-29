@@ -374,24 +374,23 @@ func errorGuidance(err error, appErr *apperr.Error, command, store string) (stri
 			"aascribe --store ./project-mem list",
 		}
 	case "CONFIG_NOT_FOUND":
-		return "Run `aascribe init` to create data/config/config.toml before calling the LLM-backed command.", []string{
-			"aascribe init",
+		return "Create the config skeleton, then set the required Gemini API key. The key has no default.", []string{
+			"aascribe config gemini_api_key=your-real-key",
 			"cat ./data/config/config.toml",
-			"aascribe chat \"Say hello\"",
+			"aascribe index <path>",
 		}
 	case "INVALID_CONFIG":
-		return "Check the [llm] section in data/config/config.toml and fix the missing or unsupported fields.", []string{
+		return "Fix data/config/config.toml. LLM-backed commands require [llm] provider = \"gemini\", model, api_key_env, and a positive timeout_seconds.", []string{
 			"cat ./data/config/config.toml",
-			"aascribe chat --help",
-			"aascribe --help",
+			"set missing fields such as: model = \"gemini-2.5-flash\"",
+			"aascribe config gemini_api_key=your-real-key",
 		}
 	case "MISSING_SECRET":
-		return "Set the API key environment variable configured in data/config/config.toml, or place it in .env in the current working directory or in data/config/.env.", []string{
+		return "Set the required Gemini API key before running summary-backed index or other LLM-backed commands. The key has no default.", []string{
+			"aascribe config gemini_api_key=your-real-key",
 			"export GEMINI_API_KEY=your-real-key",
-			"echo 'GEMINI_API_KEY=your-real-key' >> .env",
 			"echo 'GEMINI_API_KEY=your-real-key' >> ./data/config/.env",
-			"aascribe chat \"Say hello\"",
-			"aascribe --store ./project-mem chat \"Say hello\"",
+			"aascribe index <path>",
 		}
 	case "NOT_IMPLEMENTED":
 		switch command {

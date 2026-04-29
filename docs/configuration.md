@@ -34,7 +34,7 @@ The memory store is still resolved using the same logic as the CLI:
 The config directory is a sibling `config/` directory beside the memory store directory.
 This keeps durable memory data separate from config and `.env` secret files.
 
-`aascribe init` creates a default `config.toml` template when the config file does not already exist.
+`aascribe init` creates a default `config.toml` skeleton when the config file does not already exist.
 It preserves an existing config, including when `--force` is used.
 
 ## Why Secrets Use Environment Variables
@@ -78,13 +78,39 @@ max_file_size = 1048576
 default_depth = 3
 ```
 
+The default skeleton can safely fill in non-secret fields. Secret fields cannot be assigned a default value.
+
+Required fields for summary-backed `index` and other LLM-backed commands:
+
+| Field | Required | Meaning |
+|---|---:|---|
+| `llm.provider` | yes | Must be `"gemini"` in the current implementation |
+| `llm.model` | yes | Gemini model used for summaries and debug LLM commands |
+| `llm.api_key_env` | yes | Environment variable name that stores the secret key |
+| `llm.timeout_seconds` | yes | Positive request timeout |
+| `gemini_api_key` / `GEMINI_API_KEY` | yes | Secret Gemini API key value. No default is possible |
+| `defaults.format` | no | Default output format. Defaults to `json` when omitted |
+| `index.max_file_size` | no | Maximum file size for summarization. Defaults to `1048576` |
+| `index.default_depth` | no | Default index depth. Defaults to `3` |
+
+The secret value itself is not stored in `config.toml`. Set it with:
+
+```bash
+aascribe config gemini_api_key="your-real-key"
+```
+
+or provide the environment variable directly:
+
+```bash
+export GEMINI_API_KEY="your-real-key"
+```
+
 ## Quick Start
 
 ### Default Store Setup
 
 ```bash
-aascribe init
-export GEMINI_API_KEY="your-real-key"
+aascribe config gemini_api_key="your-real-key"
 
 aascribe describe ./README.md
 ```
@@ -92,8 +118,7 @@ aascribe describe ./README.md
 ### Skill-Friendly Explicit Store
 
 ```bash
-aascribe init --store ./project-mem
-export GEMINI_API_KEY="your-real-key"
+aascribe --store ./project-mem config gemini_api_key="your-real-key"
 
 ./bin/aascribe --store ./project-mem describe ./main.go
 ```
@@ -137,7 +162,7 @@ export AASCRIBE_LLM_TIMEOUT_SECONDS="45"
 
 Fix:
 
-- run `aascribe init` to create the default config template
+- run `aascribe config gemini_api_key="your-real-key"` to create the default config skeleton and store the required secret
 - or pass the correct `--store` path
 
 ### `INVALID_CONFIG`
@@ -154,10 +179,10 @@ Check:
 
 ### `MISSING_SECRET`
 
-The environment variable named by `api_key_env` is missing or empty.
+The environment variable named by `api_key_env` is missing or empty. This is a required secret for summary-backed `index`; it has no default.
 
 Fix:
 
 ```bash
-export GEMINI_API_KEY="your-real-key"
+aascribe config gemini_api_key="your-real-key"
 ```

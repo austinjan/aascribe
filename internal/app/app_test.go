@@ -43,6 +43,20 @@ func TestParseGlobalStoreAfterCommand(t *testing.T) {
 	}
 }
 
+func TestParseConfigGeminiAPIKey(t *testing.T) {
+	parsed, err := cli.Parse([]string{"config", "gemini_api_key=secret"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.ConfigSetCommand)
+	if !ok {
+		t.Fatalf("expected config command, got %#v", parsed.Command)
+	}
+	if cmd.Key != "gemini_api_key" || cmd.Value != "secret" {
+		t.Fatalf("unexpected config command: %#v", cmd)
+	}
+}
+
 func TestParseDefaultFormatText(t *testing.T) {
 	parsed, err := cli.Parse([]string{"list"})
 	if err != nil {
@@ -207,6 +221,52 @@ func TestParseIndexFlagsAfterPath(t *testing.T) {
 	}
 	if len(cmd.Include) != 2 || cmd.Include[0] != "*.go" || cmd.Include[1] != "*.md" {
 		t.Fatalf("unexpected include flags: %#v", cmd.Include)
+	}
+}
+
+func TestParseIndexMetadataMethods(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "./tests", "--metadata-method", "summary", "--metadata-method", "base"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.IndexCommand)
+	if !ok {
+		t.Fatalf("expected index command, got %#v", parsed.Command)
+	}
+	if len(cmd.MetadataMethods) != 2 || cmd.MetadataMethods[0] != "summary" || cmd.MetadataMethods[1] != "base" {
+		t.Fatalf("unexpected metadata methods: %#v", cmd.MetadataMethods)
+	}
+	effective := cmd.EffectiveMetadataMethods()
+	if len(effective) != 2 || effective[0] != "base" || effective[1] != "summary" {
+		t.Fatalf("unexpected effective metadata methods: %#v", effective)
+	}
+}
+
+func TestParseIndexNoMetadataMethodsKeepsBaseOnly(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "./tests", "--no-metadata-methods"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.IndexCommand)
+	if !ok {
+		t.Fatalf("expected index command, got %#v", parsed.Command)
+	}
+	effective := cmd.EffectiveMetadataMethods()
+	if len(effective) != 1 || effective[0] != "base" {
+		t.Fatalf("unexpected effective metadata methods: %#v", effective)
+	}
+	if !cmd.EffectiveNoSummary() {
+		t.Fatalf("expected no summary when optional metadata methods are disabled")
+	}
+}
+
+func TestParseIndexRejectsUnsupportedMetadataMethod(t *testing.T) {
+	_, err := cli.Parse([]string{"index", "./tests", "--metadata-method", "classify"})
+	if err == nil {
+		t.Fatalf("expected unsupported metadata method error")
+	}
+	if !strings.Contains(err.Error(), "Unsupported metadata method") {
+		t.Fatalf("expected unsupported metadata method message, got %v", err)
 	}
 }
 
@@ -732,7 +792,7 @@ func TestRunIndexReturnsTree(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	status := Run([]string{"--format", "json", "index", root}, &stdout, &stderr)
+	status := Run([]string{"--format", "json", "index", root, "--no-metadata-methods"}, &stdout, &stderr)
 	if status != 0 {
 		t.Fatalf("expected success status, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
 	}
@@ -786,7 +846,7 @@ func TestRunIndexMapReturnsAssembledMap(t *testing.T) {
 
 	var indexStdout bytes.Buffer
 	var indexStderr bytes.Buffer
-	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	status := Run([]string{"--format", "json", "index", root, "--no-metadata-methods"}, &indexStdout, &indexStderr)
 	if status != 0 {
 		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
 	}
@@ -849,7 +909,7 @@ func TestRunMapReturnsAssembledMap(t *testing.T) {
 
 	var indexStdout bytes.Buffer
 	var indexStderr bytes.Buffer
-	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	status := Run([]string{"--format", "json", "index", root, "--no-metadata-methods"}, &indexStdout, &indexStderr)
 	if status != 0 {
 		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
 	}
@@ -921,7 +981,7 @@ func TestRunMapOmitsIgnoredDirectories(t *testing.T) {
 
 	var indexStdout bytes.Buffer
 	var indexStderr bytes.Buffer
-	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	status := Run([]string{"--format", "json", "index", root, "--no-metadata-methods"}, &indexStdout, &indexStderr)
 	if status != 0 {
 		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
 	}
@@ -970,7 +1030,7 @@ func TestRunMapTextReturnsCompactTree(t *testing.T) {
 
 	var indexStdout bytes.Buffer
 	var indexStderr bytes.Buffer
-	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	status := Run([]string{"--format", "json", "index", root, "--no-metadata-methods"}, &indexStdout, &indexStderr)
 	if status != 0 {
 		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
 	}
@@ -1011,7 +1071,7 @@ func TestRunMapUnindexedNodeUsesSimpleStateAndGuide(t *testing.T) {
 
 	var indexStdout bytes.Buffer
 	var indexStderr bytes.Buffer
-	status := Run([]string{"--format", "json", "index", "--depth", "2", root}, &indexStdout, &indexStderr)
+	status := Run([]string{"--format", "json", "index", "--depth", "2", root, "--no-metadata-methods"}, &indexStdout, &indexStderr)
 	if status != 0 {
 		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
 	}
@@ -1070,7 +1130,7 @@ func TestRunMapTextShowsStateGuideAndUnindexedState(t *testing.T) {
 
 	var indexStdout bytes.Buffer
 	var indexStderr bytes.Buffer
-	status := Run([]string{"--format", "json", "index", "--depth", "2", root}, &indexStdout, &indexStderr)
+	status := Run([]string{"--format", "json", "index", "--depth", "2", root, "--no-metadata-methods"}, &indexStdout, &indexStderr)
 	if status != 0 {
 		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
 	}
@@ -1102,7 +1162,7 @@ func TestRunIndexDirtyMarksMetadataDirty(t *testing.T) {
 
 	var indexStdout bytes.Buffer
 	var indexStderr bytes.Buffer
-	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	status := Run([]string{"--format", "json", "index", root, "--no-metadata-methods"}, &indexStdout, &indexStderr)
 	if status != 0 {
 		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
 	}
@@ -1134,7 +1194,7 @@ func TestRunIndexEvalReturnsChangedAndUnchangedStates(t *testing.T) {
 
 	var indexStdout bytes.Buffer
 	var indexStderr bytes.Buffer
-	status := Run([]string{"--format", "json", "index", root}, &indexStdout, &indexStderr)
+	status := Run([]string{"--format", "json", "index", root, "--no-metadata-methods"}, &indexStdout, &indexStderr)
 	if status != 0 {
 		t.Fatalf("expected index success status, got %d stderr=%q stdout=%q", status, indexStderr.String(), indexStdout.String())
 	}
@@ -1283,6 +1343,13 @@ func TestInitFailsWithoutForceWhenStoreExists(t *testing.T) {
 	if err := os.MkdirAll(storePath, 0o755); err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
+	assertNoError(t, os.MkdirAll(config.ConfigDir(storePath), 0o755))
+	assertNoError(t, os.WriteFile(config.ConfigPath(storePath), []byte(`[llm]
+provider = "gemini"
+model = "gemini-2.5-flash"
+api_key_env = "GEMINI_API_KEY"
+timeout_seconds = 30
+`), 0o644))
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -1293,6 +1360,35 @@ func TestInitFailsWithoutForceWhenStoreExists(t *testing.T) {
 	if !strings.Contains(stdout.String(), "STORE_ALREADY_EXISTS") {
 		t.Fatalf("expected STORE_ALREADY_EXISTS output, got %s", stdout.String())
 	}
+}
+
+func TestInitRepairsMissingConfigWhenStoreExists(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "aascribe-store")
+	assertNoError(t, os.MkdirAll(filepath.Join(storePath, "short_term"), 0o755))
+	assertNoError(t, os.WriteFile(filepath.Join(storePath, "layout.json"), []byte(`{"layout_version":"bootstrap-v1"}`), 0o644))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	status := Run([]string{"--format", "json", "--store", storePath, "init"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected repair init success, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected valid json output, got %v", err)
+	}
+	data := payload["data"].(map[string]any)
+	if data["created"] != false {
+		t.Fatalf("expected existing store created=false, got %#v", data["created"])
+	}
+	if data["reinitialized"] != false {
+		t.Fatalf("expected repair without reinit, got %#v", data["reinitialized"])
+	}
+	if data["config_created"] != true {
+		t.Fatalf("expected missing config to be created, got %#v", data["config_created"])
+	}
+	assertExists(t, config.ConfigPath(storePath))
 }
 
 func TestInitReinitializesWhenForceIsSet(t *testing.T) {
@@ -1332,6 +1428,63 @@ func TestInitReportsTextOutput(t *testing.T) {
 	if !strings.Contains(rendered, "next: set GEMINI_API_KEY") {
 		t.Fatalf("expected LLM secret next-step hint, got %q", rendered)
 	}
+}
+
+func TestRunConfigGeminiAPIKeyCreatesStoreAndEnvFile(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "aascribe-store")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"--format", "json", "--store", storePath, "config", "gemini_api_key=test-secret"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected config success, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+	if strings.Contains(stdout.String(), "test-secret") {
+		t.Fatalf("expected config output not to echo secret, got %s", stdout.String())
+	}
+	assertExists(t, config.ConfigPath(storePath))
+	envPath := filepath.Join(config.ConfigDir(storePath), ".env")
+	content, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("expected .env to be readable, got %v", err)
+	}
+	if string(content) != "GEMINI_API_KEY=test-secret\n" {
+		t.Fatalf("unexpected .env content: %q", string(content))
+	}
+}
+
+func TestRunCommandAutoCreatesMissingStore(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "aascribe-store")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"--format", "json", "--store", storePath, "logs", "path"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected logs path success, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+	assertExists(t, filepath.Join(storePath, "layout.json"))
+	assertExists(t, config.ConfigPath(storePath))
+}
+
+func TestRunCommandAutoRepairsMissingConfig(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "aascribe-store")
+	assertNoError(t, os.MkdirAll(filepath.Join(storePath, "short_term"), 0o755))
+	assertNoError(t, os.WriteFile(filepath.Join(storePath, "layout.json"), []byte(`{"layout_version":"bootstrap-v1"}`), 0o644))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	t.Setenv("GEMINI_API_KEY", "")
+	status := Run([]string{"--format", "json", "--store", storePath, "index", t.TempDir()}, &stdout, &stderr)
+	if status != 1 {
+		t.Fatalf("expected missing secret status after config repair, got %d stderr=%q stdout=%q", status, stderr.String(), stdout.String())
+	}
+	if strings.Contains(stdout.String(), "CONFIG_NOT_FOUND") {
+		t.Fatalf("expected missing config to be repaired before command execution, got %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "MISSING_SECRET") {
+		t.Fatalf("expected missing secret after config repair, got %s", stdout.String())
+	}
+	assertExists(t, config.ConfigPath(storePath))
 }
 
 func TestInitPreservesExistingConfig(t *testing.T) {

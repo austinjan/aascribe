@@ -596,12 +596,24 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 			return IndexedPathNode{}, err
 		}
 		name := entry.Name()
+		if isMetadataArtifact(name) {
+			continue
+		}
 		childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
-		if localMatcher.skip(name, childDisplay, entry.IsDir()) {
+		childAbs := filepath.Join(absPath, name)
+		isDir, err := entryIsDir(childAbs, entry)
+		if err != nil {
+			recordFailure(metadata, childDisplay, err.Error())
+			recordMetadataFailure(metadata, childDisplay, err.Error())
+			rt.noteFailedFile(err.Error())
+			tracker.noteFailure(metadata)
+			continue
+		}
+		if localMatcher.skip(name, childDisplay, isDir) {
 			continue
 		}
 
-		if entry.IsDir() {
+		if isDir {
 			if opts.Depth >= 0 && depth >= opts.Depth {
 				continue
 			}
@@ -678,6 +690,31 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 	return node, nil
 }
 
+func isMetadataArtifact(name string) bool {
+	if name == metadataFilename {
+		return true
+	}
+	return strings.HasPrefix(name, metadataFilename+".") && strings.HasSuffix(name, ".tmp")
+}
+
+func entryIsDir(absPath string, entry os.DirEntry) (bool, error) {
+	if entry.IsDir() {
+		return true, nil
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return false, apperr.IOError("Failed to inspect directory entry: %s.", absPath)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return false, nil
+	}
+	info, err = os.Stat(absPath)
+	if err != nil {
+		return false, apperr.IOError("Failed to inspect symlink target: %s.", absPath)
+	}
+	return info.IsDir(), nil
+}
+
 func buildFile(absPath, displayPath string, opts Options, timestamp string, metadata *Metadata, priorMetadata *Metadata, rt *buildRuntime) (IndexedPathNode, error) {
 	rt.noteDiscoveredFile()
 	if reused, ok, err := reuseFileFromMetadata(absPath, displayPath, opts, metadata, priorMetadata); err != nil {
@@ -703,6 +740,8 @@ func buildFile(absPath, displayPath string, opts Options, timestamp string, meta
 		Hash: analysis.hash,
 	}
 	if opts.NoSummary {
+		analysis.summary = ""
+		analysis.generatedAt = ""
 		recordNotIndexed(metadata, displayPath, "no_summary_mode")
 		recordMetadataFile(metadata, analysis, "not_indexed", "no_summary_mode", "")
 		rt.noteNotIndexed("no_summary_mode")
@@ -1253,6 +1292,9 @@ func reuseFileFromMetadata(absPath, displayPath string, opts Options, metadata *
 	if prior.Status == "failed" {
 		return IndexedPathNode{}, false, nil
 	}
+	if !opts.NoSummary && prior.Status == "not_indexed" && prior.NotIndexedReason == "no_summary_mode" {
+		return IndexedPathNode{}, false, nil
+	}
 
 	info, err := os.Stat(absPath)
 	if err != nil {
@@ -1316,13 +1358,28 @@ func writeMetadata(root string, metadata *Metadata) error {
 		return apperr.Serialization("Failed to serialize index metadata.")
 	}
 
-	target := filepath.Join(root, metadataFilename)
-	temp := target + ".tmp"
-	if err := os.WriteFile(temp, content, 0o644); err != nil {
-		return apperr.IOError("Failed to write index metadata: %s.", temp)
+	writeRoot := root
+	if resolved, err := filepath.EvalSymlinks(root); err == nil && resolved != "" {
+		writeRoot = resolved
+	}
+	target := filepath.Join(writeRoot, metadataFilename)
+	tempFile, err := os.CreateTemp(writeRoot, metadataFilename+".*.tmp")
+	if err != nil {
+		return apperr.IOError("Failed to create index metadata temp file in %s: %v.", writeRoot, err)
+	}
+	temp := tempFile.Name()
+	if _, err := tempFile.Write(content); err != nil {
+		_ = tempFile.Close()
+		_ = os.Remove(temp)
+		return apperr.IOError("Failed to write index metadata: %s: %v.", temp, err)
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(temp)
+		return apperr.IOError("Failed to close index metadata temp file: %s: %v.", temp, err)
 	}
 	if err := os.Rename(temp, target); err != nil {
-		return apperr.IOError("Failed to finalize index metadata: %s.", target)
+		_ = os.Remove(temp)
+		return apperr.IOError("Failed to finalize index metadata: %s: %v.", target, err)
 	}
 	return nil
 }
