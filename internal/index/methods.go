@@ -84,8 +84,15 @@ type FileMethodInput struct {
 	ContentHash string `json:"content_hash"`
 	Summary     string `json:"summary,omitempty"`
 	Text        string `json:"text,omitempty"`
+	Prompt      Prompt `json:"prompt,omitempty"`
 	NoSummary   bool   `json:"no_summary"`
 	Status      string `json:"status"`
+}
+
+type Prompt struct {
+	Path   string `json:"path,omitempty"`
+	SHA256 string `json:"sha256,omitempty"`
+	Text   string `json:"text,omitempty"`
 }
 
 type FolderMethodInput struct {
@@ -209,6 +216,7 @@ func stableInputHash(input any, method Method) string {
 	hashInput := input
 	if fileInput, ok := input.(FileMethodInput); ok {
 		fileInput.Text = ""
+		fileInput.Prompt.Text = ""
 		hashInput = fileInput
 	}
 	payload := map[string]any{
@@ -288,12 +296,22 @@ func (m retrievalMethodV1) BuildFile(ctx context.Context, input FileMethodInput)
 		return nil, err
 	}
 	hints := buildRetrievalHints(input)
-	return MethodFields{
+	fields := MethodFields{
 		"retrieval_terms": hints.terms,
 		"aliases":         hints.aliases,
 		"entities":        hints.entities,
 		"likely_queries":  hints.queries,
-	}, nil
+	}
+	if input.Prompt.Path != "" || input.Prompt.SHA256 != "" {
+		fields["prompt"] = map[string]string{
+			"path":   input.Prompt.Path,
+			"sha256": input.Prompt.SHA256,
+		}
+	}
+	if promptWantsWarnings(input.Prompt.Text) {
+		fields["warnings"] = []string{}
+	}
+	return fields, nil
 }
 
 type routingMethodV1 struct{}
@@ -443,6 +461,7 @@ type retrievalHints struct {
 func buildRetrievalHints(input FileMethodInput) retrievalHints {
 	source := strings.Join([]string{input.Path, input.Summary, input.Text}, "\n")
 	lowerSource := strings.ToLower(source)
+	includeSourceQuote := promptWantsSourceQuote(input.Prompt.Text)
 	terms := []string{}
 	queries := []string{}
 	aliases := []map[string]string{}
@@ -477,7 +496,7 @@ func buildRetrievalHints(input FileMethodInput) retrievalHints {
 		addTerm(from)
 		addTerm(to)
 	}
-	addEntity := func(name, role string) {
+	addEntity := func(name, role, sourceQuote string) {
 		name = cleanRetrievalName(name)
 		role = cleanRetrievalPhrase(role)
 		if name == "" {
@@ -489,11 +508,15 @@ func buildRetrievalHints(input FileMethodInput) retrievalHints {
 				return
 			}
 		}
-		entities = append(entities, map[string]string{
+		entity := map[string]string{
 			"name": name,
 			"type": "tool_or_topic",
 			"role": role,
-		})
+		}
+		if includeSourceQuote {
+			entity["source_quote"] = cleanRetrievalPhrase(sourceQuote)
+		}
+		entities = append(entities, entity)
 		addTerm(name)
 		addTerm(role)
 		if role != "" {
@@ -515,9 +538,9 @@ func buildRetrievalHints(input FileMethodInput) retrievalHints {
 	}
 
 	for _, line := range strings.Split(source, "\n") {
-		name, role, ok := parseRetrievalEntityLine(line)
+		name, role, sourceQuote, ok := parseRetrievalEntityLine(line)
 		if ok {
-			addEntity(name, role)
+			addEntity(name, role, sourceQuote)
 		}
 	}
 
@@ -573,29 +596,37 @@ func buildRetrievalHints(input FileMethodInput) retrievalHints {
 	}
 }
 
-func parseRetrievalEntityLine(line string) (string, string, bool) {
+func parseRetrievalEntityLine(line string) (string, string, string, bool) {
 	line = strings.TrimSpace(line)
 	if shouldSkipRetrievalLine(line) {
-		return "", "", false
+		return "", "", "", false
 	}
 	trimmed, ok := trimRetrievalListMarker(line)
 	if !ok {
-		return "", "", false
+		return "", "", "", false
 	}
 	line = trimmed
 	if line == "" {
-		return "", "", false
+		return "", "", "", false
 	}
 	for _, sep := range []string{" - ", " – ", " — ", ": "} {
 		if before, after, ok := strings.Cut(line, sep); ok {
 			name := cleanRetrievalName(before)
 			role := cleanRetrievalPhrase(after)
 			if name != "" && role != "" && len(strings.Fields(name)) <= 4 {
-				return name, role, true
+				return name, role, line, true
 			}
 		}
 	}
-	return "", "", false
+	return "", "", "", false
+}
+
+func promptWantsSourceQuote(prompt string) bool {
+	return strings.Contains(strings.ToLower(prompt), "source_quote")
+}
+
+func promptWantsWarnings(prompt string) bool {
+	return strings.Contains(strings.ToLower(prompt), "warnings")
 }
 
 func cleanRetrievalName(value string) string {

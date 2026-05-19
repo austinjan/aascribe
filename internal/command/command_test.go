@@ -362,6 +362,38 @@ func TestRunIndexReviewWorkflowCreatesAgentArtifacts(t *testing.T) {
 	if !strings.Contains(statusResult.Text, "prompt_patched") {
 		t.Fatalf("unexpected status text: %q", statusResult.Text)
 	}
+
+	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("- **xh** - HTTP client\n"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+	indexResult, err := runIndex(storePath, cli.IndexCommand{
+		Path:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{index.MethodBase, index.MethodRetrievalV1},
+	})
+	if err != nil {
+		t.Fatalf("expected index success with patched prompt, got %v", err)
+	}
+	tree, ok := indexResult.Data.(*index.PathIndexTree)
+	if !ok || tree.ReportPath == "" {
+		t.Fatalf("expected index tree with report path, got %#v", indexResult.Data)
+	}
+	updatedMeta, err := os.ReadFile(filepath.Join(root, ".aascribe_index_meta.json"))
+	if err != nil {
+		t.Fatalf("read updated metadata: %v", err)
+	}
+	if !strings.Contains(string(updatedMeta), "source_quote") || !strings.Contains(string(updatedMeta), "prompts/retrieval/generate.v1.md") {
+		t.Fatalf("expected patched prompt to affect retrieval metadata, got %s", string(updatedMeta))
+	}
+
+	if _, err := runIndexReviewRestore(storePath, review.CheckpointID); err != nil {
+		t.Fatalf("expected restore success, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "prompts", "retrieval", "generate.v1.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected restore to remove prompt created after checkpoint, stat err=%v", err)
+	}
 }
 
 func TestRunIndexUsesIndexPlan(t *testing.T) {

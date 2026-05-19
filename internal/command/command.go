@@ -2,6 +2,8 @@ package command
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -206,6 +208,7 @@ func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, er
 			return nil, err
 		}
 	}
+	methodPrompts := loadIndexMethodPrompts(storePath, cmd.EffectiveMetadataMethods())
 	result, err := index.Build(index.Options{
 		Root:                cmd.Path,
 		Depth:               cmd.Depth,
@@ -216,6 +219,7 @@ func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, er
 		NoSummary:           noSummary,
 		MaxFileSize:         cmd.MaxFileSize,
 		MetadataMethods:     cmd.EffectiveMetadataMethods(),
+		MethodPrompts:       methodPrompts,
 		Summarizer:          summarizer,
 		FailureNoticeWriter: os.Stderr,
 	})
@@ -663,11 +667,7 @@ func snapshotIndexReviewMetadata(root, checkpointDir string) ([]string, error) {
 
 func snapshotIndexReviewPrompts(checkpointDir string) ([]string, error) {
 	backups := []string{}
-	for _, path := range []string{
-		filepath.Join("prompts", "retrieval", "generate.v1.md"),
-		filepath.Join("prompts", "retrieval", "review.v1.md"),
-		filepath.Join("prompts", "retrieval", "patch.v1.md"),
-	} {
+	for _, path := range indexReviewPromptPaths() {
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
@@ -681,6 +681,13 @@ func snapshotIndexReviewPrompts(checkpointDir string) ([]string, error) {
 }
 
 func restoreIndexReviewCheckpoint(state indexReviewState) error {
+	promptTargets := map[string]bool{}
+	for _, promptBackup := range state.PromptBackups {
+		_, promptTarget, promptOK := strings.Cut(promptBackup, "=>")
+		if promptOK {
+			promptTargets[promptTarget] = true
+		}
+	}
 	for _, mapping := range append(append([]string{}, state.MetadataBackups...), state.PromptBackups...) {
 		source, target, ok := strings.Cut(mapping, "=>")
 		if !ok {
@@ -690,7 +697,23 @@ func restoreIndexReviewCheckpoint(state indexReviewState) error {
 			return err
 		}
 	}
+	for _, promptPath := range indexReviewPromptPaths() {
+		if promptTargets[promptPath] {
+			continue
+		}
+		if err := os.Remove(promptPath); err != nil && !os.IsNotExist(err) {
+			return apperr.IOError("Failed to remove prompt created after checkpoint: %s.", promptPath)
+		}
+	}
 	return nil
+}
+
+func indexReviewPromptPaths() []string {
+	return []string{
+		filepath.Join("prompts", "retrieval", "generate.v1.md"),
+		filepath.Join("prompts", "retrieval", "review.v1.md"),
+		filepath.Join("prompts", "retrieval", "patch.v1.md"),
+	}
 }
 
 func copyFileForReview(source, target string) error {
@@ -2213,6 +2236,48 @@ func buildRequiredLLMSummarizer(storePath string, usage *tokenUsageTracker) (ind
 		return nil, err
 	}
 	return llmSummarizer(resolved, usage), nil
+}
+
+func loadIndexMethodPrompts(storePath string, methods []string) map[string]index.Prompt {
+	out := map[string]index.Prompt{}
+	for _, method := range methods {
+		if method != index.MethodRetrievalV1 {
+			continue
+		}
+		if prompt, ok := loadRetrievalPrompt(storePath); ok {
+			out[method] = prompt
+		}
+	}
+	return out
+}
+
+func loadRetrievalPrompt(storePath string) (index.Prompt, bool) {
+	for _, path := range retrievalPromptCandidates(storePath) {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(content)
+		return index.Prompt{
+			Path:   filepath.ToSlash(path),
+			SHA256: "sha256:" + hex.EncodeToString(sum[:]),
+			Text:   string(content),
+		}, true
+	}
+	content := []byte(defaultRetrievalPromptProposal(nil))
+	sum := sha256.Sum256(content)
+	return index.Prompt{
+		Path:   "embedded:prompts/retrieval/generate.v1.md",
+		SHA256: "sha256:" + hex.EncodeToString(sum[:]),
+		Text:   string(content),
+	}, true
+}
+
+func retrievalPromptCandidates(storePath string) []string {
+	return []string{
+		filepath.Join(storePath, "prompts", "retrieval", "generate.v1.md"),
+		filepath.Join("prompts", "retrieval", "generate.v1.md"),
+	}
 }
 
 func llmSummarizer(resolved *config.Resolved, usage *tokenUsageTracker) index.SummarizerFunc {

@@ -35,6 +35,7 @@ type Options struct {
 	NoSummary           bool
 	MaxFileSize         int64
 	MetadataMethods     []string
+	MethodPrompts       map[string]Prompt
 	Summarizer          SummarizerFunc
 	FailureThreshold    int
 	FailureNoticeWriter io.Writer
@@ -1294,6 +1295,7 @@ func runFileMethods(analysis *fileAnalysis, status string, opts Options, timesta
 		if !selected[id] {
 			continue
 		}
+		input.Prompt = opts.MethodPrompts[id]
 		descriptor := method.Describe()
 		output := MethodOutput{
 			Stage:       descriptor.Stage,
@@ -1505,6 +1507,7 @@ func reusableMethodOutputs(prior *MetadataFile, opts Options) bool {
 		if !selected[id] {
 			continue
 		}
+		input.Prompt = opts.MethodPrompts[id]
 		output, ok := prior.Methods[id]
 		if !ok {
 			return false
