@@ -460,6 +460,29 @@ func TestRunTopLevelHelpIncludesAgentGuidance(t *testing.T) {
 	if !strings.Contains(rendered, "aascribe <command> --help") {
 		t.Fatalf("expected follow-up help guidance, got %q", rendered)
 	}
+	if !strings.Contains(rendered, "aascribe map --help") || !strings.Contains(rendered, "aascribe index --help") {
+		t.Fatalf("expected root help to route agents to command-specific help, got %q", rendered)
+	}
+	if strings.Contains(rendered, "Current Implementation Status:") || strings.Contains(rendered, "index review propose") {
+		t.Fatalf("expected root help to stay progressively disclosed, got %q", rendered)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+}
+
+func TestRunMapHelpRoutesSearchWorkflow(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"map", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	if !strings.Contains(rendered, "Use search after map") || !strings.Contains(rendered, "aascribe index map ./internal") {
+		t.Fatalf("expected map help to route map/search workflow, got %q", rendered)
+	}
 	if stderr.Len() != 0 {
 		t.Fatalf("expected no stderr output, got %q", stderr.String())
 	}
@@ -671,6 +694,12 @@ func TestRunIndexHelpMentionsIgnoreFiles(t *testing.T) {
 	if !strings.Contains(rendered, "aascribe index --depth 2 ./internal") {
 		t.Fatalf("expected index help examples to reflect current flag ordering, got %q", rendered)
 	}
+	if !strings.Contains(rendered, "aascribe index review --help") {
+		t.Fatalf("expected index help to route agents to review help, got %q", rendered)
+	}
+	if strings.Contains(rendered, "aascribe index review propose") || strings.Contains(rendered, "aascribe index review patch") {
+		t.Fatalf("expected index help to avoid detailed review workflow, got %q", rendered)
+	}
 	if stderr.Len() != 0 {
 		t.Fatalf("expected no stderr output, got %q", stderr.String())
 	}
@@ -691,6 +720,7 @@ func TestRunIndexPlanHelpGuidesAgents(t *testing.T) {
 		"Plan Verification Workflow For AI Agents",
 		"Do not run aascribe index <path> --index-plan <file> until validation succeeds.",
 		"version = \"index-plan-v1\"",
+		"Do not write boolean keys",
 		"builtin.classify.v1",
 		"builtin.routing.v1",
 	} {

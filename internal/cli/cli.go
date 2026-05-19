@@ -449,6 +449,7 @@ Commands:
   output       Browse stored oversized outputs for LLM-safe continuation
   operation    Inspect persisted long-running operation state
   index        Index a folder for later retrieval and summarization
+  map          Read generated index metadata as a compact routing map
   search       Exact text search with line-level matches
   describe     Summarize one file with optional length and focus controls
   remember     Write a short-term memory item
@@ -460,47 +461,21 @@ Commands:
   show         Show one memory entry in full
   forget       Delete one memory entry
 
-Main Flows:
-  1. Initialize a store for the current workspace:
-     aascribe init
-  2. Use an explicit project-local store when needed:
-     aascribe --store ./project-mem init
-  3. Check where logs are being written:
-     aascribe logs path
-  4. Export logs for debugging:
-     aascribe logs export --output ./aascribe.log
+AI Agent Routing:
+  - First-time setup? Run aascribe init --help.
+  - Need LLM credentials? Run aascribe config --help.
+  - Need to index or improve retrieval? Run aascribe index --help.
+  - Need to inspect index metadata? Run aascribe map --help.
+  - Need exact confirmation after routing? Run aascribe search --help.
+  - Need logs or long-running operation state? Run aascribe logs --help or aascribe operation --help.
 
-Current Implementation Status:
-  Working now:
-    init
-    config
-    logs path
-    logs export
-    logs clear
-    output generate
-    output list
-    output meta
-    output show
-    output head
-    output tail
-    output slice
-    operation list
-    operation status
-    operation events
-    operation result
-    operation cancel
-    index
-    index clean
-    search
-    describe
-    chat
-    summarize
-  CLI surface exists but command execution is still being implemented:
-    remember, consolidate, recall, list, show, forget
+Implementation Notes:
+  Core store, logging, output, operation, index, map, search, describe, chat, and summarize commands are active.
+  Memory authoring commands remember, consolidate, recall, list, show, and forget still have CLI surface before full execution.
 
 How To Get More Information:
   aascribe <command> --help
-  aascribe logs --help
+  aascribe index --help
   Read docs/USAGE.md for the longer reference
   Default output is compact text for LLM reading; prefer --format json when another agent or tool will parse the result
 `)
@@ -846,12 +821,6 @@ Usage:
   aascribe index <path> [--depth <n>] [--include <glob>] [--exclude <glob>] [--refresh] [--no-summary] [--metadata-method <method>] [--no-metadata-methods] [--index-plan <file>] [--max-file-size <bytes>]
   aascribe index methods [--stage file|folder|start|end]
   aascribe index plan validate <file>
-  aascribe index review <path> [--method <method>]
-  aascribe index review propose <review-json>
-  aascribe index review patch <proposal-json>
-  aascribe index review status <checkpoint-id>
-  aascribe index review accept <checkpoint-id>
-  aascribe index review restore <checkpoint-id>
   aascribe index dirty <path>
   aascribe index eval <path>
   aascribe index clean <path> [--dry-run] --force
@@ -865,12 +834,18 @@ Behavior:
   Use --index-plan to run built-in methods listed in an index-plan-v1 TOML file.
   Use index methods to list method descriptions in text or JSON form.
   Use index plan validate to check an index-plan-v1 TOML file without running index.
-  Use index review to create a checkpointed review workflow for retrieval metadata and prompt iteration.
+  Use index review to improve retrieval metadata quality after indexing. Run aascribe index review --help for the checkpoint workflow.
   Use --concurrency to bound direct-file processing across the whole index run.
   Use --async to start index as an operation and inspect it later with operation status/events/result.
   Use index dirty to mark existing metadata stale so the next index run rebuilds it.
   Use index eval to preview which folders and direct files need indexing and which ones are unchanged.
   Use index clean to remove generated .aascribe_index_meta.json files recursively.
+
+AI Agent Routing:
+  - Need to preview scope? Run aascribe index eval --help.
+  - Need to choose methods or write TOML? Run aascribe index plan --help.
+  - Need valid method ids/descriptions? Run aascribe index methods --help.
+  - Retrieval metadata looks low quality? Run aascribe index review --help.
 
 Examples:
   aascribe index .
@@ -880,8 +855,6 @@ Examples:
   aascribe index methods
   aascribe index plan validate ./aascribe.index.toml
   aascribe index review ./coding --method builtin.retrieval.v1
-  aascribe index review propose ./data/report/retrieval-review.json
-  aascribe index review status index-review-20260519-abc123
   aascribe index --index-plan ./aascribe.index.toml ./internal
   aascribe --format json index methods --stage file
   aascribe --store ./project-mem index --exclude vendor .
@@ -980,6 +953,8 @@ Current Plan Format:
 Rules:
   - [methods].enabled is the only required section.
   - base metadata always runs; including "base" is optional and usually unnecessary.
+  - Methods are enabled by string ids in [methods].enabled.
+  - Do not write boolean keys such as builtin_retrieval_v1 = true or summary = true.
   - "summary" enables LLM-backed file summaries and requires configured LLM credentials.
   - "builtin.classify.v1" performs deterministic file classification.
   - "builtin.retrieval.v1" emits LLM-facing retrieval terms, aliases, entities, and likely queries from bounded file text.
@@ -1117,13 +1092,40 @@ Purpose:
 Usage:
   aascribe index eval <path>
 
-Examples:
-  aascribe index eval ./internal
-  aascribe index eval ./tests
-
 Notes:
   This command does not write metadata.
   Folder state is local-only: child folder changes do not make the parent folder changed unless the parent's own direct files or metadata changed.
+
+Agent Notes:
+  Use eval before expensive or LLM-backed indexing.
+  If eval shows too much noise, narrow the next index run with --depth, --include, --exclude, or .aaignore.
+  If eval misses expected files, adjust include/exclude rules before writing an index plan.
+
+Examples:
+  aascribe index eval ./internal
+  aascribe index --depth 2 ./internal
+  aascribe index --include "*.go" --exclude "vendor/**" ./internal
+`)
+	case "map":
+		return strings.TrimSpace(`
+aascribe map - read generated index metadata as a compact routing map
+
+Purpose:
+  Help an agent inspect which folders are indexed, stale, missing metadata, or ready for routing before doing exact search or opening files.
+
+Usage:
+  aascribe map <path>
+  aascribe index map <path>
+
+Agent Notes:
+  Use map after indexing to route through existing .aascribe_index_meta.json files.
+  Use index when metadata is missing or stale.
+  Use search after map when you need exact line-level confirmation.
+
+Examples:
+  aascribe map .
+  aascribe map ./internal
+  aascribe index map ./internal
 `)
 	case "search":
 		return strings.TrimSpace(`
