@@ -203,6 +203,43 @@ type IndexPlanValidateCommand struct {
 
 func (c IndexPlanValidateCommand) Name() string { return "index" }
 
+type IndexReviewCommand struct {
+	Path   string
+	Method string
+}
+
+func (c IndexReviewCommand) Name() string { return "index" }
+
+type IndexReviewProposeCommand struct {
+	ReviewJSON string
+}
+
+func (c IndexReviewProposeCommand) Name() string { return "index" }
+
+type IndexReviewPatchCommand struct {
+	ProposalJSON string
+}
+
+func (c IndexReviewPatchCommand) Name() string { return "index" }
+
+type IndexReviewStatusCommand struct {
+	CheckpointID string
+}
+
+func (c IndexReviewStatusCommand) Name() string { return "index" }
+
+type IndexReviewAcceptCommand struct {
+	CheckpointID string
+}
+
+func (c IndexReviewAcceptCommand) Name() string { return "index" }
+
+type IndexReviewRestoreCommand struct {
+	CheckpointID string
+}
+
+func (c IndexReviewRestoreCommand) Name() string { return "index" }
+
 type IndexMapCommand struct {
 	Path string
 }
@@ -809,6 +846,12 @@ Usage:
   aascribe index <path> [--depth <n>] [--include <glob>] [--exclude <glob>] [--refresh] [--no-summary] [--metadata-method <method>] [--no-metadata-methods] [--index-plan <file>] [--max-file-size <bytes>]
   aascribe index methods [--stage file|folder|start|end]
   aascribe index plan validate <file>
+  aascribe index review <path> [--method <method>]
+  aascribe index review propose <review-json>
+  aascribe index review patch <proposal-json>
+  aascribe index review status <checkpoint-id>
+  aascribe index review accept <checkpoint-id>
+  aascribe index review restore <checkpoint-id>
   aascribe index dirty <path>
   aascribe index eval <path>
   aascribe index clean <path> [--dry-run] --force
@@ -822,6 +865,7 @@ Behavior:
   Use --index-plan to run built-in methods listed in an index-plan-v1 TOML file.
   Use index methods to list method descriptions in text or JSON form.
   Use index plan validate to check an index-plan-v1 TOML file without running index.
+  Use index review to create a checkpointed review workflow for retrieval metadata and prompt iteration.
   Use --concurrency to bound direct-file processing across the whole index run.
   Use --async to start index as an operation and inspect it later with operation status/events/result.
   Use index dirty to mark existing metadata stale so the next index run rebuilds it.
@@ -835,6 +879,9 @@ Examples:
   aascribe index --async ./internal
   aascribe index methods
   aascribe index plan validate ./aascribe.index.toml
+  aascribe index review ./coding --method builtin.retrieval.v1
+  aascribe index review propose ./data/report/retrieval-review.json
+  aascribe index review status index-review-20260519-abc123
   aascribe index --index-plan ./aascribe.index.toml ./internal
   aascribe --format json index methods --stage file
   aascribe --store ./project-mem index --exclude vendor .
@@ -844,7 +891,49 @@ Examples:
 
 Further Info:
   aascribe --help
-  Read docs/USAGE.md and docs/spec/index-spec.md for the stable index contract
+ Read docs/USAGE.md and docs/spec/index-spec.md for the stable index contract
+`)
+	case "index review":
+		return strings.TrimSpace(`
+aascribe index review - checkpointed review workflow for retrieval metadata
+
+Purpose:
+  Help AI agents improve retrieval metadata and prompt files without blind mutation.
+  The workflow is checkpoint-first: review current state, propose prompt changes, patch, verify, then accept or restore.
+
+Usage:
+  aascribe index review <path> [--method builtin.retrieval.v1]
+  aascribe index review propose <review-json>
+  aascribe index review patch <proposal-json>
+  aascribe index review status <checkpoint-id>
+  aascribe index review accept <checkpoint-id>
+  aascribe index review restore <checkpoint-id>
+
+AI Agent Workflow:
+  1. Run review to create a checkpoint and review report.
+  2. Read review_json.
+  3. If issues are prompt-level, run propose.
+  4. Read proposal_json and proposal_markdown.
+  5. If acceptable, run patch.
+  6. Re-run index with --refresh.
+  7. Re-run review.
+  8. If improved, accept the checkpoint. If worse, restore it.
+
+Agent Contract:
+  Every subcommand returns status, writes, artifacts, and next actions.
+  review writes a checkpoint and report, but does not modify metadata or prompts.
+  propose writes a proposal, but does not modify metadata or prompts.
+  patch modifies prompt files only.
+  accept closes a checkpoint.
+  restore restores checkpointed prompt and metadata files.
+
+Examples:
+  aascribe index review ./coding --method builtin.retrieval.v1
+  aascribe index review propose ./data/report/2026-05-19-retrieval-review.json
+  aascribe index review patch ./data/report/2026-05-19-retrieval-prompt-proposal.json
+  aascribe index review status index-review-20260519-abc123
+  aascribe index review accept index-review-20260519-abc123
+  aascribe index review restore index-review-20260519-abc123
 `)
 	case "index plan":
 		return strings.TrimSpace(`
@@ -1656,6 +1745,9 @@ func parseIndex(args []string) (Command, error) {
 	if len(args) > 0 && args[0] == "plan" {
 		return parseIndexPlan(args[1:])
 	}
+	if len(args) > 0 && args[0] == "review" {
+		return parseIndexReview(args[1:])
+	}
 	if len(args) > 0 && args[0] == "map" {
 		return parseMap(args[1:])
 	}
@@ -1752,6 +1844,53 @@ func parseIndexPlan(args []string) (Command, error) {
 		return nil, newParseError(ParseErrorMissingRequiredArg, "index plan validate", "path", "index plan validate requires exactly one plan path.")
 	}
 	return IndexPlanValidateCommand{Path: fs.Args()[0]}, nil
+}
+
+func parseIndexReview(args []string) (Command, error) {
+	if len(args) == 0 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "index review", "path-or-subcommand", "index review requires a path or subcommand: propose, patch, status, accept, restore.")
+	}
+	switch args[0] {
+	case "propose":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index review propose", "review-json", "index review propose requires exactly one review JSON path.")
+		}
+		return IndexReviewProposeCommand{ReviewJSON: args[1]}, nil
+	case "patch":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index review patch", "proposal-json", "index review patch requires exactly one proposal JSON path.")
+		}
+		return IndexReviewPatchCommand{ProposalJSON: args[1]}, nil
+	case "status":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index review status", "checkpoint-id", "index review status requires exactly one checkpoint id.")
+		}
+		return IndexReviewStatusCommand{CheckpointID: args[1]}, nil
+	case "accept":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index review accept", "checkpoint-id", "index review accept requires exactly one checkpoint id.")
+		}
+		return IndexReviewAcceptCommand{CheckpointID: args[1]}, nil
+	case "restore":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index review restore", "checkpoint-id", "index review restore requires exactly one checkpoint id.")
+		}
+		return IndexReviewRestoreCommand{CheckpointID: args[1]}, nil
+	}
+	fs := newFlagSet("index review")
+	cmd := IndexReviewCommand{Method: MetadataMethodRetrievalV1}
+	fs.StringVar(&cmd.Method, "method", MetadataMethodRetrievalV1, "")
+	if err := parseFlags(fs, args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 1 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "index review", "path", "index review requires exactly one path argument.")
+	}
+	if cmd.Method == "" {
+		return nil, newParseError(ParseErrorMissingRequiredFlag, "index review", "--method", "index review requires a non-empty --method value.")
+	}
+	cmd.Path = fs.Args()[0]
+	return cmd, nil
 }
 
 func parseIndexMap(args []string) (Command, error) {

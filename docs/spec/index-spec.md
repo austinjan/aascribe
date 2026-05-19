@@ -35,6 +35,12 @@ Discovery:
 aascribe index methods [--stage file|folder|start|end]
 aascribe --format json index methods [--stage file|folder|start|end]
 aascribe index plan validate <file>
+aascribe index review <path> [--method <method>]
+aascribe index review propose <review-json>
+aascribe index review patch <proposal-json>
+aascribe index review status <checkpoint-id>
+aascribe index review accept <checkpoint-id>
+aascribe index review restore <checkpoint-id>
 ```
 
 | Flag              | Type       | Default     | Meaning                                                                 |
@@ -66,8 +72,42 @@ Metadata method selection:
 - `--metadata-method` and `--no-metadata-methods` are mutually exclusive.
 - `--index-plan` is mutually exclusive with `--metadata-method` and `--no-metadata-methods`.
 - `index plan validate <file>` validates version, enabled method ids, duplicate custom ids, custom descriptor shape, and duplicate enabled methods without running index.
+- `index review` starts a checkpointed review workflow for retrieval metadata and prompt iteration. It returns agent-readable `status`, `writes`, `artifacts`, and `next` fields so an AI caller can safely proceed through review → propose → patch → verify → accept/restore.
 - Async `--index-plan` snapshots the submitted plan into the operation directory and the worker reads the snapshot.
 - `aascribe index methods` lists method descriptors. Text output is human/agent-readable; JSON output exposes the descriptor payload used by callers.
+
+### 2.1.1 `aascribe index review`
+
+`index review` is an opt-in quality workflow. It does not run during normal indexing.
+
+```text
+aascribe index review <path> [--method builtin.retrieval.v1]
+aascribe index review propose <review-json>
+aascribe index review patch <proposal-json>
+aascribe index review status <checkpoint-id>
+aascribe index review accept <checkpoint-id>
+aascribe index review restore <checkpoint-id>
+```
+
+State model:
+
+| State | Meaning | Typical next actions |
+| --- | --- | --- |
+| `review_created` | A checkpoint and review report were written. Metadata and prompts are unchanged. | `propose`, `accept`, `restore` |
+| `proposal_created` | A prompt proposal was written. Metadata and prompts are unchanged. | `patch`, `restore` |
+| `prompt_patched` | A prompt file was patched. Re-index and review again before accepting. | `accept`, `restore` |
+| `accepted` | The checkpoint was closed as accepted. | `status` |
+| `restored` | Checkpointed metadata and prompt files were restored. | `status` |
+
+Every review subcommand should expose:
+
+- `status`: machine-readable workflow state
+- `checkpoint_id`: stable handle for accept/restore/status
+- `writes`: booleans for `metadata`, `prompt`, `checkpoint`, and report/proposal artifacts
+- `artifacts`: typed paths or checkpoint ids
+- `next`: suggested next commands with conditions
+
+Prompt files live under `prompts/retrieval/` and are part of retrieval-method behavior. Prompt changes should be proposed and checkpointed, not hidden in source code.
 
 When `--async` is set, the parent command creates a persisted operation under the active store, starts a background index worker process, and returns an `OperationAccepted` payload. The worker writes lifecycle snapshots to `<store>/operations/<operation-id>/operation.json`, event history to `events.jsonl`, and the final `PathIndexTree` result to `result.json`.
 

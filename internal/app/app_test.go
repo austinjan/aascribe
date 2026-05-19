@@ -270,6 +270,33 @@ func TestParseIndexPlanValidate(t *testing.T) {
 	}
 }
 
+func TestParseIndexReviewWorkflow(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "review", "./coding", "--method", "builtin.retrieval.v1"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	review, ok := parsed.Command.(cli.IndexReviewCommand)
+	if !ok || review.Path != "./coding" || review.Method != "builtin.retrieval.v1" {
+		t.Fatalf("unexpected review command: %#v", parsed.Command)
+	}
+
+	parsed, err = cli.Parse([]string{"index", "review", "propose", "./data/report/review.json"})
+	if err != nil {
+		t.Fatalf("expected propose parse success, got %v", err)
+	}
+	if _, ok := parsed.Command.(cli.IndexReviewProposeCommand); !ok {
+		t.Fatalf("expected propose command, got %#v", parsed.Command)
+	}
+
+	parsed, err = cli.Parse([]string{"index", "review", "restore", "index-review-abc"})
+	if err != nil {
+		t.Fatalf("expected restore parse success, got %v", err)
+	}
+	if _, ok := parsed.Command.(cli.IndexReviewRestoreCommand); !ok {
+		t.Fatalf("expected restore command, got %#v", parsed.Command)
+	}
+}
+
 func TestParseIndexPlanRejectsManualMethodSelection(t *testing.T) {
 	_, err := cli.Parse([]string{"index", ".", "--index-plan", "./plan.toml", "--metadata-method", "builtin.classify.v1"})
 	if err == nil {

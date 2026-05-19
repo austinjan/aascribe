@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -128,6 +129,18 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 		return runIndexMethods(cmd)
 	case cli.IndexPlanValidateCommand:
 		return runIndexPlanValidate(cmd)
+	case cli.IndexReviewCommand:
+		return runIndexReview(storePath, cmd)
+	case cli.IndexReviewProposeCommand:
+		return runIndexReviewPropose(storePath, cmd)
+	case cli.IndexReviewPatchCommand:
+		return runIndexReviewPatch(storePath, cmd)
+	case cli.IndexReviewStatusCommand:
+		return runIndexReviewStatus(storePath, cmd.CheckpointID)
+	case cli.IndexReviewAcceptCommand:
+		return runIndexReviewAccept(storePath, cmd.CheckpointID)
+	case cli.IndexReviewRestoreCommand:
+		return runIndexReviewRestore(storePath, cmd.CheckpointID)
 	case cli.IndexMapCommand:
 		return runIndexMap(cmd)
 	case cli.MapCommand:
@@ -266,6 +279,609 @@ func runIndexPlanValidate(cmd cli.IndexPlanValidateCommand) (*output.CommandResu
 		Data: validation,
 		Text: text,
 	}, nil
+}
+
+type indexReviewState struct {
+	CheckpointID     string   `json:"checkpoint_id"`
+	State            string   `json:"state"`
+	Method           string   `json:"method,omitempty"`
+	ReviewedPath     string   `json:"reviewed_path,omitempty"`
+	CreatedAt        string   `json:"created_at"`
+	UpdatedAt        string   `json:"updated_at"`
+	ReviewJSON       string   `json:"review_json,omitempty"`
+	ReviewMarkdown   string   `json:"review_markdown,omitempty"`
+	ProposalJSON     string   `json:"proposal_json,omitempty"`
+	ProposalMarkdown string   `json:"proposal_markdown,omitempty"`
+	PromptPath       string   `json:"prompt_path,omitempty"`
+	MetadataBackups  []string `json:"metadata_backups,omitempty"`
+	PromptBackups    []string `json:"prompt_backups,omitempty"`
+}
+
+type indexReviewFinding struct {
+	Path       string `json:"path"`
+	Severity   string `json:"severity"`
+	Kind       string `json:"kind"`
+	Message    string `json:"message"`
+	Suggestion string `json:"suggestion,omitempty"`
+}
+
+type indexReviewReport struct {
+	Status         string               `json:"status"`
+	CheckpointID   string               `json:"checkpoint_id"`
+	Method         string               `json:"method"`
+	ReviewedPath   string               `json:"reviewed_path"`
+	CreatedAt      string               `json:"created_at"`
+	ReviewJSON     string               `json:"review_json"`
+	ReviewMarkdown string               `json:"review_markdown"`
+	Findings       []indexReviewFinding `json:"findings"`
+	Writes         map[string]bool      `json:"writes"`
+	Artifacts      []map[string]string  `json:"artifacts"`
+	Next           []map[string]string  `json:"next"`
+}
+
+type indexReviewProposal struct {
+	Status          string               `json:"status"`
+	CheckpointID    string               `json:"checkpoint_id"`
+	ReviewJSON      string               `json:"review_json"`
+	PromptPath      string               `json:"prompt_path"`
+	ProposedContent string               `json:"proposed_content"`
+	Findings        []indexReviewFinding `json:"findings"`
+	Writes          map[string]bool      `json:"writes"`
+	Artifacts       []map[string]string  `json:"artifacts"`
+	Next            []map[string]string  `json:"next"`
+}
+
+func runIndexReview(storePath string, cmd cli.IndexReviewCommand) (*output.CommandResult, error) {
+	root, err := filepath.Abs(cmd.Path)
+	if err != nil {
+		return nil, apperr.IOError("Failed to resolve review path: %s.", cmd.Path)
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, apperr.IOError("Failed to inspect review path: %s.", root)
+	}
+	if !info.IsDir() {
+		return nil, apperr.InvalidArguments("index review path must be a directory: %s", root)
+	}
+	now := time.Now().UTC()
+	checkpointID := fmt.Sprintf("index-review-%s", now.Format("20060102T150405Z"))
+	checkpointDir := indexReviewCheckpointDir(storePath, checkpointID)
+	if err := os.MkdirAll(checkpointDir, 0o755); err != nil {
+		return nil, apperr.IOError("Failed to create review checkpoint: %s.", checkpointDir)
+	}
+	metadataBackups, err := snapshotIndexReviewMetadata(root, checkpointDir)
+	if err != nil {
+		return nil, err
+	}
+	promptBackups, _ := snapshotIndexReviewPrompts(checkpointDir)
+	findings, err := inspectRetrievalMetadata(root, cmd.Method)
+	if err != nil {
+		return nil, err
+	}
+	reportDir := filepath.Join(storePath, "report")
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		return nil, apperr.IOError("Failed to create report directory: %s.", reportDir)
+	}
+	base := now.Format("2006-01-02-150405") + "-retrieval-review"
+	reviewJSON := filepath.Join(reportDir, base+".json")
+	reviewMarkdown := filepath.Join(reportDir, base+".md")
+	state := indexReviewState{
+		CheckpointID:    checkpointID,
+		State:           "review_created",
+		Method:          cmd.Method,
+		ReviewedPath:    root,
+		CreatedAt:       now.Format(time.RFC3339),
+		UpdatedAt:       now.Format(time.RFC3339),
+		ReviewJSON:      reviewJSON,
+		ReviewMarkdown:  reviewMarkdown,
+		MetadataBackups: metadataBackups,
+		PromptBackups:   promptBackups,
+	}
+	report := indexReviewReport{
+		Status:         "review_created",
+		CheckpointID:   checkpointID,
+		Method:         cmd.Method,
+		ReviewedPath:   root,
+		CreatedAt:      now.Format(time.RFC3339),
+		ReviewJSON:     reviewJSON,
+		ReviewMarkdown: reviewMarkdown,
+		Findings:       findings,
+		Writes: map[string]bool{
+			"checkpoint": true,
+			"report":     true,
+			"metadata":   false,
+			"prompt":     false,
+		},
+		Artifacts: []map[string]string{
+			{"type": "checkpoint", "id": checkpointID, "path": checkpointDir},
+			{"type": "review_report_json", "path": reviewJSON},
+			{"type": "review_report_markdown", "path": reviewMarkdown},
+		},
+		Next: []map[string]string{
+			{"command": "aascribe index review propose " + reviewJSON, "when": "Use if findings indicate prompt-level problems."},
+			{"command": "aascribe index review accept " + checkpointID, "when": "Use if no prompt changes are needed."},
+			{"command": "aascribe index review restore " + checkpointID, "when": "Use if you need to return to the checkpointed metadata and prompt files."},
+		},
+	}
+	if err := writeJSONFile(reviewJSON, report); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(reviewMarkdown, []byte(renderIndexReviewMarkdown(report)), 0o644); err != nil {
+		return nil, apperr.IOError("Failed to write review report: %s.", reviewMarkdown)
+	}
+	if err := saveIndexReviewState(storePath, state); err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: report,
+		Text: renderIndexReviewResult(report.Status, report.CheckpointID, report.Artifacts, report.Next),
+	}, nil
+}
+
+func runIndexReviewPropose(storePath string, cmd cli.IndexReviewProposeCommand) (*output.CommandResult, error) {
+	var report indexReviewReport
+	if err := readJSONFile(cmd.ReviewJSON, &report); err != nil {
+		return nil, err
+	}
+	state, err := loadIndexReviewState(storePath, report.CheckpointID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	reportDir := filepath.Dir(cmd.ReviewJSON)
+	base := now.Format("2006-01-02-150405") + "-retrieval-prompt-proposal"
+	proposalJSON := filepath.Join(reportDir, base+".json")
+	proposalMarkdown := filepath.Join(reportDir, base+".md")
+	promptPath := filepath.Join("prompts", "retrieval", "generate.v1.md")
+	proposal := indexReviewProposal{
+		Status:          "proposal_created",
+		CheckpointID:    report.CheckpointID,
+		ReviewJSON:      cmd.ReviewJSON,
+		PromptPath:      promptPath,
+		ProposedContent: defaultRetrievalPromptProposal(report.Findings),
+		Findings:        report.Findings,
+		Writes: map[string]bool{
+			"checkpoint": true,
+			"proposal":   true,
+			"metadata":   false,
+			"prompt":     false,
+		},
+		Artifacts: []map[string]string{
+			{"type": "prompt_proposal_json", "path": proposalJSON},
+			{"type": "prompt_proposal_markdown", "path": proposalMarkdown},
+			{"type": "checkpoint", "id": report.CheckpointID},
+		},
+		Next: []map[string]string{
+			{"command": "aascribe index review patch " + proposalJSON, "when": "Use if the prompt proposal is acceptable."},
+			{"command": "aascribe index review restore " + report.CheckpointID, "when": "Use if you want to abandon this prompt experiment."},
+		},
+	}
+	if err := writeJSONFile(proposalJSON, proposal); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(proposalMarkdown, []byte(renderIndexReviewProposalMarkdown(proposal)), 0o644); err != nil {
+		return nil, apperr.IOError("Failed to write prompt proposal: %s.", proposalMarkdown)
+	}
+	state.State = "proposal_created"
+	state.UpdatedAt = now.Format(time.RFC3339)
+	state.ProposalJSON = proposalJSON
+	state.ProposalMarkdown = proposalMarkdown
+	state.PromptPath = promptPath
+	if err := saveIndexReviewState(storePath, state); err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: proposal,
+		Text: renderIndexReviewResult(proposal.Status, proposal.CheckpointID, proposal.Artifacts, proposal.Next),
+	}, nil
+}
+
+func runIndexReviewPatch(storePath string, cmd cli.IndexReviewPatchCommand) (*output.CommandResult, error) {
+	var proposal indexReviewProposal
+	if err := readJSONFile(cmd.ProposalJSON, &proposal); err != nil {
+		return nil, err
+	}
+	state, err := loadIndexReviewState(storePath, proposal.CheckpointID)
+	if err != nil {
+		return nil, err
+	}
+	promptPath := filepath.Clean(proposal.PromptPath)
+	if filepath.IsAbs(promptPath) || strings.HasPrefix(promptPath, ".."+string(os.PathSeparator)) || promptPath == ".." {
+		return nil, apperr.InvalidArguments("proposal prompt path must be a relative path inside the workspace: %s", proposal.PromptPath)
+	}
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		return nil, apperr.IOError("Failed to create prompt directory: %s.", filepath.Dir(promptPath))
+	}
+	if err := os.WriteFile(promptPath, []byte(proposal.ProposedContent), 0o644); err != nil {
+		return nil, apperr.IOError("Failed to write prompt file: %s.", promptPath)
+	}
+	state.State = "prompt_patched"
+	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	state.PromptPath = promptPath
+	if err := saveIndexReviewState(storePath, state); err != nil {
+		return nil, err
+	}
+	data := map[string]any{
+		"status":        "prompt_patched",
+		"checkpoint_id": proposal.CheckpointID,
+		"writes": map[string]bool{
+			"prompt":     true,
+			"metadata":   false,
+			"checkpoint": true,
+		},
+		"artifacts": []map[string]string{{"type": "prompt_file", "path": promptPath}, {"type": "checkpoint", "id": proposal.CheckpointID}},
+		"next": []map[string]string{
+			{"command": "aascribe index <path> --refresh --index-plan <plan>", "when": "Re-run affected index so the new prompt can produce fresh metadata."},
+			{"command": "aascribe index review <path> --method " + state.Method, "when": "Review the patched output."},
+			{"command": "aascribe index review accept " + proposal.CheckpointID, "when": "Use if the patched output improved."},
+			{"command": "aascribe index review restore " + proposal.CheckpointID, "when": "Use if the patched output is worse."},
+		},
+	}
+	return &output.CommandResult{Data: data, Text: renderIndexReviewResult("prompt_patched", proposal.CheckpointID, data["artifacts"].([]map[string]string), data["next"].([]map[string]string))}, nil
+}
+
+func runIndexReviewStatus(storePath, checkpointID string) (*output.CommandResult, error) {
+	state, err := loadIndexReviewState(storePath, checkpointID)
+	if err != nil {
+		return nil, err
+	}
+	data := map[string]any{
+		"status":        "checkpoint_status",
+		"checkpoint_id": checkpointID,
+		"state":         state.State,
+		"can":           indexReviewAllowedActions(state.State),
+		"writes": map[string]bool{
+			"prompt":     false,
+			"metadata":   false,
+			"checkpoint": false,
+		},
+		"artifacts": []map[string]string{{"type": "checkpoint", "id": checkpointID, "path": indexReviewCheckpointDir(storePath, checkpointID)}},
+	}
+	return &output.CommandResult{Data: data, Text: "status: checkpoint_status\ncheckpoint_id: " + checkpointID + "\nstate: " + state.State + "\ncan: " + stringListText(indexReviewAllowedActions(state.State))}, nil
+}
+
+func runIndexReviewAccept(storePath, checkpointID string) (*output.CommandResult, error) {
+	state, err := loadIndexReviewState(storePath, checkpointID)
+	if err != nil {
+		return nil, err
+	}
+	state.State = "accepted"
+	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := saveIndexReviewState(storePath, state); err != nil {
+		return nil, err
+	}
+	data := map[string]any{
+		"status":        "accepted",
+		"checkpoint_id": checkpointID,
+		"writes":        map[string]bool{"checkpoint": true, "metadata": false, "prompt": false},
+		"next":          []map[string]string{{"command": "aascribe index review status " + checkpointID, "when": "Use to inspect the closed checkpoint."}},
+	}
+	return &output.CommandResult{Data: data, Text: "status: accepted\ncheckpoint_id: " + checkpointID}, nil
+}
+
+func runIndexReviewRestore(storePath, checkpointID string) (*output.CommandResult, error) {
+	state, err := loadIndexReviewState(storePath, checkpointID)
+	if err != nil {
+		return nil, err
+	}
+	if err := restoreIndexReviewCheckpoint(state); err != nil {
+		return nil, err
+	}
+	state.State = "restored"
+	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := saveIndexReviewState(storePath, state); err != nil {
+		return nil, err
+	}
+	data := map[string]any{
+		"status":        "restored",
+		"checkpoint_id": checkpointID,
+		"writes":        map[string]bool{"checkpoint": true, "metadata": true, "prompt": true},
+		"next":          []map[string]string{{"command": "aascribe index review status " + checkpointID, "when": "Use to confirm restore state."}},
+	}
+	return &output.CommandResult{Data: data, Text: "status: restored\ncheckpoint_id: " + checkpointID}, nil
+}
+
+func indexReviewCheckpointDir(storePath, checkpointID string) string {
+	return filepath.Join(storePath, "index-review", "checkpoints", checkpointID)
+}
+
+func indexReviewStatePath(storePath, checkpointID string) string {
+	return filepath.Join(indexReviewCheckpointDir(storePath, checkpointID), "state.json")
+}
+
+func saveIndexReviewState(storePath string, state indexReviewState) error {
+	path := indexReviewStatePath(storePath, state.CheckpointID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return apperr.IOError("Failed to create review checkpoint directory: %s.", filepath.Dir(path))
+	}
+	return writeJSONFile(path, state)
+}
+
+func loadIndexReviewState(storePath, checkpointID string) (indexReviewState, error) {
+	var state indexReviewState
+	path := indexReviewStatePath(storePath, checkpointID)
+	if err := readJSONFile(path, &state); err != nil {
+		return state, err
+	}
+	return state, nil
+}
+
+func writeJSONFile(path string, value any) error {
+	encoded, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return apperr.Serialization("Failed to serialize JSON artifact.")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return apperr.IOError("Failed to create artifact directory: %s.", filepath.Dir(path))
+	}
+	if err := os.WriteFile(path, append(encoded, '\n'), 0o644); err != nil {
+		return apperr.IOError("Failed to write JSON artifact: %s.", path)
+	}
+	return nil
+}
+
+func readJSONFile(path string, target any) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return apperr.IOError("Failed to read JSON artifact: %s.", path)
+	}
+	if err := json.Unmarshal(content, target); err != nil {
+		return apperr.Serialization("Failed to parse JSON artifact: %s.", path)
+	}
+	return nil
+}
+
+func snapshotIndexReviewMetadata(root, checkpointDir string) ([]string, error) {
+	backups := []string{}
+	metadataRoot := filepath.Join(checkpointDir, "metadata")
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if filepath.Base(path) != ".aascribe_index_meta.json" {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(metadataRoot, rel)
+		if err := copyFileForReview(path, target); err != nil {
+			return err
+		}
+		backups = append(backups, target+"=>"+path)
+		return nil
+	})
+	if err != nil {
+		return nil, apperr.IOError("Failed to snapshot index metadata under %s.", root)
+	}
+	return backups, nil
+}
+
+func snapshotIndexReviewPrompts(checkpointDir string) ([]string, error) {
+	backups := []string{}
+	for _, path := range []string{
+		filepath.Join("prompts", "retrieval", "generate.v1.md"),
+		filepath.Join("prompts", "retrieval", "review.v1.md"),
+		filepath.Join("prompts", "retrieval", "patch.v1.md"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		target := filepath.Join(checkpointDir, "prompts", path)
+		if err := copyFileForReview(path, target); err != nil {
+			return backups, err
+		}
+		backups = append(backups, target+"=>"+path)
+	}
+	return backups, nil
+}
+
+func restoreIndexReviewCheckpoint(state indexReviewState) error {
+	for _, mapping := range append(append([]string{}, state.MetadataBackups...), state.PromptBackups...) {
+		source, target, ok := strings.Cut(mapping, "=>")
+		if !ok {
+			continue
+		}
+		if err := copyFileForReview(source, target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFileForReview(source, target string) error {
+	content, err := os.ReadFile(source)
+	if err != nil {
+		return apperr.IOError("Failed to read checkpoint source: %s.", source)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return apperr.IOError("Failed to create checkpoint target directory: %s.", filepath.Dir(target))
+	}
+	if err := os.WriteFile(target, content, 0o644); err != nil {
+		return apperr.IOError("Failed to write checkpoint target: %s.", target)
+	}
+	return nil
+}
+
+func inspectRetrievalMetadata(root, method string) ([]indexReviewFinding, error) {
+	findings := []indexReviewFinding{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || filepath.Base(path) != ".aascribe_index_meta.json" {
+			return nil
+		}
+		var meta struct {
+			Files []struct {
+				Path    string `json:"path"`
+				Methods map[string]struct {
+					Fields map[string]any `json:"fields"`
+				} `json:"methods"`
+			} `json:"files"`
+		}
+		if err := readJSONFile(path, &meta); err != nil {
+			return err
+		}
+		for _, file := range meta.Files {
+			output, ok := file.Methods[method]
+			if !ok {
+				continue
+			}
+			fieldsText := fmt.Sprint(output.Fields)
+			for _, label := range []string{"Example", "Note", "Warning", "Tip"} {
+				if strings.Contains(fieldsText, "from:"+label) || strings.Contains(fieldsText, "name:"+label) || strings.Contains(fieldsText, "\""+label+"\"") {
+					findings = append(findings, indexReviewFinding{
+						Path:       file.Path,
+						Severity:   "high",
+						Kind:       "label_as_entity",
+						Message:    label + " appears to be treated as a retrieval entity or alias source.",
+						Suggestion: "Prompt should treat Markdown labels such as Example, Note, Warning, and Tip as context labels, not entities.",
+					})
+				}
+			}
+			if strings.Contains(fieldsText, "](") {
+				findings = append(findings, indexReviewFinding{
+					Path:       file.Path,
+					Severity:   "medium",
+					Kind:       "markdown_leakage",
+					Message:    "Raw Markdown link syntax appears in retrieval metadata.",
+					Suggestion: "Prompt should emit clean link text or omit navigation links.",
+				})
+			}
+			if looksLikeReviewCodeLeak(fieldsText) {
+				findings = append(findings, indexReviewFinding{
+					Path:       file.Path,
+					Severity:   "medium",
+					Kind:       "code_snippet_leakage",
+					Message:    "Command-like code snippets appear in retrieval metadata.",
+					Suggestion: "Prompt should avoid emitting examples, shell commands, and code snippets as retrieval terms.",
+				})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(findings) == 0 {
+		findings = append(findings, indexReviewFinding{
+			Path:       root,
+			Severity:   "info",
+			Kind:       "no_obvious_issues",
+			Message:    "No obvious deterministic retrieval metadata issues were detected.",
+			Suggestion: "If semantic misses remain, run an LLM review prompt or add eval cases.",
+		})
+	}
+	return findings, nil
+}
+
+func looksLikeReviewCodeLeak(value string) bool {
+	lower := strings.ToLower(value)
+	for _, needle := range []string{" fd ", " rg ", " grep ", " curl ", " xh ", " bat file", "*.txt", "```"} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func renderIndexReviewMarkdown(report indexReviewReport) string {
+	lines := []string{
+		"# Retrieval Review Report",
+		"",
+		"- status: " + report.Status,
+		"- checkpoint_id: " + report.CheckpointID,
+		"- method: " + report.Method,
+		"- reviewed_path: " + report.ReviewedPath,
+		"",
+		"## Findings",
+	}
+	for _, finding := range report.Findings {
+		lines = append(lines, "", "- "+finding.Severity+" "+finding.Kind+": "+finding.Path, "  - "+finding.Message)
+		if finding.Suggestion != "" {
+			lines = append(lines, "  - suggestion: "+finding.Suggestion)
+		}
+	}
+	lines = append(lines, "", "## Next", "")
+	for _, next := range report.Next {
+		lines = append(lines, "- `"+next["command"]+"` — "+next["when"])
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func renderIndexReviewProposalMarkdown(proposal indexReviewProposal) string {
+	return strings.Join([]string{
+		"# Retrieval Prompt Proposal",
+		"",
+		"- status: " + proposal.Status,
+		"- checkpoint_id: " + proposal.CheckpointID,
+		"- prompt_path: " + proposal.PromptPath,
+		"",
+		"## Proposed Prompt",
+		"",
+		"```markdown",
+		proposal.ProposedContent,
+		"```",
+	}, "\n") + "\n"
+}
+
+func defaultRetrievalPromptProposal(findings []indexReviewFinding) string {
+	return strings.TrimSpace(`# Retrieval Metadata Generation Prompt v1
+
+You generate retrieval metadata for an AI agent. Return strict JSON only.
+
+Rules:
+- Preserve important source terms, names, and roles.
+- Add useful aliases and multilingual terms when they help future LLM retrieval.
+- Treat Markdown labels such as Example, Note, Warning, Tip, and Usage as context labels, not entities.
+- Do not emit shell commands, code examples, Markdown link syntax, or long snippets as retrieval terms.
+- Prefer a small number of natural likely_queries over many formulaic templates.
+- aliases[].from must refer to a real entity name unless the alias explicitly expands an acronym.
+
+Required JSON fields:
+- entities: array of {name,type,role,source_quote}
+- aliases: array of {from,to,reason}
+- retrieval_terms: array of strings
+- likely_queries: array of natural-language user intents
+- warnings: array of strings
+`) + "\n"
+}
+
+func renderIndexReviewResult(status, checkpointID string, artifacts []map[string]string, next []map[string]string) string {
+	lines := []string{"status: " + status, "checkpoint_id: " + checkpointID, "artifacts:"}
+	for _, artifact := range artifacts {
+		label := artifact["type"]
+		value := artifact["path"]
+		if value == "" {
+			value = artifact["id"]
+		}
+		lines = append(lines, "- "+label+": "+value)
+	}
+	lines = append(lines, "next:")
+	for _, item := range next {
+		lines = append(lines, "- "+item["command"])
+	}
+	return strings.Join(lines, "\n")
+}
+
+func indexReviewAllowedActions(state string) []string {
+	switch state {
+	case "review_created":
+		return []string{"propose", "accept", "restore"}
+	case "proposal_created":
+		return []string{"patch", "restore"}
+	case "prompt_patched":
+		return []string{"accept", "restore"}
+	case "accepted", "restored":
+		return []string{"status"}
+	default:
+		return []string{"status", "restore"}
+	}
 }
 
 func runIndexAsync(storePath string, cmd cli.IndexCommand) (*output.CommandResult, error) {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -261,7 +262,7 @@ type retrievalMethodV1 struct{}
 
 func (retrievalMethodV1) ID() string { return MethodRetrievalV1 }
 
-func (retrievalMethodV1) Fingerprint() string { return "builtin.retrieval.v1:deterministic:1" }
+func (retrievalMethodV1) Fingerprint() string { return "builtin.retrieval.v1:deterministic:2" }
 
 func (retrievalMethodV1) Describe() MethodDescriptor {
 	return MethodDescriptor{
@@ -449,14 +450,14 @@ func buildRetrievalHints(input FileMethodInput) retrievalHints {
 
 	addTerm := func(term string) {
 		term = cleanRetrievalPhrase(term)
-		if term == "" {
+		if term == "" || isRetrievalNoisePhrase(term) {
 			return
 		}
 		addUniqueString(&terms, term)
 	}
 	addQuery := func(query string) {
 		query = cleanRetrievalPhrase(query)
-		if query == "" {
+		if query == "" || isRetrievalNoisePhrase(query) {
 			return
 		}
 		addUniqueString(&queries, query)
@@ -497,6 +498,8 @@ func buildRetrievalHints(input FileMethodInput) retrievalHints {
 		addTerm(role)
 		if role != "" {
 			addTerm(name + " " + role)
+			addQuery("how to set up " + role)
+			addQuery("which tool handles " + role)
 			addQuery("find " + role)
 			addQuery("configure " + role)
 		}
@@ -522,9 +525,12 @@ func buildRetrievalHints(input FileMethodInput) retrievalHints {
 		addAlias("WSL", "Windows Subsystem for Linux")
 		addTerm("linux development environment")
 		addQuery("set up editor on linux")
+		addQuery("set up development tools on Windows Subsystem for Linux")
 	}
 	if strings.Contains(lowerSource, "zed") && strings.Contains(lowerSource, "wsl") {
 		addQuery("install zed in wsl")
+		addQuery("how to install zed on Windows Subsystem for Linux")
+		addQuery("set up zed editor in wsl")
 	}
 	for _, entity := range entities {
 		name := strings.ToLower(entity["name"])
@@ -532,11 +538,14 @@ func buildRetrievalHints(input FileMethodInput) retrievalHints {
 		switch {
 		case name == "xh" || strings.Contains(role, "http"):
 			addAlias(entity["name"], "HTTP client")
+			addAlias(entity["name"], "API client")
+			addTerm("API testing")
 		case name == "starship" || strings.Contains(role, "prompt"):
 			addAlias(entity["name"], "cross-shell prompt")
 			addTerm("shell prompt")
 		case name == "zoxide" || strings.Contains(role, "cd command"):
 			addAlias(entity["name"], "directory navigation")
+			addAlias(entity["name"], "fuzzy directory jump")
 			addTerm("smarter cd command")
 		}
 	}
@@ -560,13 +569,20 @@ func buildRetrievalHints(input FileMethodInput) retrievalHints {
 		terms:    limitStrings(terms, 32),
 		aliases:  limitStringMaps(aliases, 12),
 		entities: limitStringMaps(entities, 16),
-		queries:  limitStrings(queries, 16),
+		queries:  limitStrings(queries, 24),
 	}
 }
 
 func parseRetrievalEntityLine(line string) (string, string, bool) {
 	line = strings.TrimSpace(line)
-	line = strings.TrimLeft(line, "-*0123456789. \t")
+	if shouldSkipRetrievalLine(line) {
+		return "", "", false
+	}
+	trimmed, ok := trimRetrievalListMarker(line)
+	if !ok {
+		return "", "", false
+	}
+	line = trimmed
 	if line == "" {
 		return "", "", false
 	}
@@ -583,6 +599,7 @@ func parseRetrievalEntityLine(line string) (string, string, bool) {
 }
 
 func cleanRetrievalName(value string) string {
+	value = stripMarkdownLinks(value)
 	value = strings.TrimSpace(value)
 	value = strings.Trim(value, "`*_[](){}<>#")
 	value = strings.TrimSpace(strings.ReplaceAll(value, "**", ""))
@@ -590,6 +607,7 @@ func cleanRetrievalName(value string) string {
 }
 
 func cleanRetrievalPhrase(value string) string {
+	value = stripMarkdownLinks(value)
 	value = strings.TrimSpace(value)
 	value = strings.Trim(value, "`*_[](){}<>#.,;:")
 	value = strings.Join(strings.Fields(value), " ")
@@ -597,6 +615,100 @@ func cleanRetrievalPhrase(value string) string {
 		return ""
 	}
 	return value
+}
+
+var markdownLinkPattern = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`)
+
+func stripMarkdownLinks(value string) string {
+	return markdownLinkPattern.ReplaceAllString(value, "$1")
+}
+
+func shouldSkipRetrievalLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "`") {
+		return true
+	}
+	if strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t") {
+		return true
+	}
+	if strings.Contains(trimmed, "](") {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "example ") ||
+		strings.HasPrefix(lower, "example:") ||
+		strings.HasPrefix(lower, "examples ") ||
+		strings.HasPrefix(lower, "examples:")
+}
+
+func trimRetrievalListMarker(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	for _, prefix := range []string{"- ", "* ", "+ "} {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix)), true
+		}
+	}
+	dot := strings.Index(line, ". ")
+	if dot > 0 && dot <= 3 {
+		number := line[:dot]
+		for _, ch := range number {
+			if ch < '0' || ch > '9' {
+				return "", false
+			}
+		}
+		return strings.TrimSpace(line[dot+2:]), true
+	}
+	return "", false
+}
+
+func isRetrievalNoisePhrase(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	if lower == "example" || strings.HasPrefix(lower, "example ") || strings.Contains(lower, "```") {
+		return true
+	}
+	allDigits := true
+	for _, ch := range trimmed {
+		if ch < '0' || ch > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		return true
+	}
+	if strings.Contains(trimmed, "](") || strings.Contains(trimmed, "[") || strings.Contains(trimmed, "]") {
+		return true
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) > 8 {
+		return true
+	}
+	if len(fields) > 1 && looksLikeShellCommand(fields) {
+		return true
+	}
+	return false
+}
+
+func looksLikeShellCommand(fields []string) bool {
+	commandNames := map[string]bool{
+		"cat": true, "cd": true, "curl": true, "fd": true, "find": true, "grep": true,
+		"ls": true, "mkdir": true, "rg": true, "rm": true, "sed": true, "wget": true,
+		"xh": true,
+	}
+	first := strings.Trim(fields[0], "`")
+	if commandNames[first] {
+		return true
+	}
+	for _, field := range fields[1:] {
+		if strings.HasPrefix(field, "-") || strings.Contains(field, "*") || strings.Contains(field, "|") {
+			return true
+		}
+	}
+	return false
 }
 
 func truncatePhrase(value string, maxWords int) string {

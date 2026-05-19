@@ -280,6 +280,90 @@ enabled = ["builtin.classify.v1"]
 	}
 }
 
+func TestRunIndexReviewWorkflowCreatesAgentArtifacts(t *testing.T) {
+	workspace := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get wd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(oldWD)
+
+	storePath := filepath.Join(workspace, "data", "memory")
+	root := filepath.Join(workspace, "coding")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	metadata := `{
+  "version": "index-meta-v1",
+  "folder_path": "` + root + `",
+  "files": [
+    {
+      "path": "coding/CLAUDE.md",
+      "methods": {
+        "builtin.retrieval.v1": {
+          "fields": {
+            "aliases": [{"from": "Example", "to": "HTTP client"}],
+            "retrieval_terms": ["` + "bat file.py" + `"]
+          }
+        }
+      }
+    }
+  ]
+}`
+	if err := os.WriteFile(filepath.Join(root, ".aascribe_index_meta.json"), []byte(metadata), 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	reviewResult, err := runIndexReview(storePath, cli.IndexReviewCommand{Path: root, Method: "builtin.retrieval.v1"})
+	if err != nil {
+		t.Fatalf("expected review success, got %v", err)
+	}
+	review, ok := reviewResult.Data.(indexReviewReport)
+	if !ok {
+		t.Fatalf("expected review report, got %T", reviewResult.Data)
+	}
+	if review.CheckpointID == "" || len(review.Findings) == 0 || !review.Writes["checkpoint"] || review.Writes["prompt"] {
+		t.Fatalf("unexpected review report: %#v", review)
+	}
+	if _, err := os.Stat(review.ReviewJSON); err != nil {
+		t.Fatalf("expected review json artifact: %v", err)
+	}
+
+	proposalResult, err := runIndexReviewPropose(storePath, cli.IndexReviewProposeCommand{ReviewJSON: review.ReviewJSON})
+	if err != nil {
+		t.Fatalf("expected proposal success, got %v", err)
+	}
+	proposal, ok := proposalResult.Data.(indexReviewProposal)
+	if !ok {
+		t.Fatalf("expected proposal, got %T", proposalResult.Data)
+	}
+	if proposal.PromptPath != filepath.Join("prompts", "retrieval", "generate.v1.md") || !strings.Contains(proposal.ProposedContent, "Return strict JSON only") {
+		t.Fatalf("unexpected proposal: %#v", proposal)
+	}
+
+	patchResult, err := runIndexReviewPatch(storePath, cli.IndexReviewPatchCommand{ProposalJSON: proposal.Artifacts[0]["path"]})
+	if err != nil {
+		t.Fatalf("expected patch success, got %v", err)
+	}
+	if !strings.Contains(patchResult.Text, "prompt_patched") {
+		t.Fatalf("unexpected patch text: %q", patchResult.Text)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "prompts", "retrieval", "generate.v1.md")); err != nil {
+		t.Fatalf("expected prompt file: %v", err)
+	}
+
+	statusResult, err := runIndexReviewStatus(storePath, review.CheckpointID)
+	if err != nil {
+		t.Fatalf("expected status success, got %v", err)
+	}
+	if !strings.Contains(statusResult.Text, "prompt_patched") {
+		t.Fatalf("unexpected status text: %q", statusResult.Text)
+	}
+}
+
 func TestRunIndexUsesIndexPlan(t *testing.T) {
 	storePath := t.TempDir()
 	root := t.TempDir()

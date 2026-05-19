@@ -359,6 +359,7 @@ Behavior notes:
 - `--index-plan` is mutually exclusive with `--metadata-method` and `--no-metadata-methods`.
 - `index plan validate <file>` validates an `index-plan-v1` TOML file without running index.
 - `index plan --help` is written as an AI-agent contract for discovering methods, drafting TOML, validating, revising, and only then running the plan.
+- `index review` provides a checkpointed prompt-improvement workflow for retrieval metadata: review current output, propose a prompt patch, patch, re-index, then accept or restore.
 - Async `--index-plan` runs snapshot the submitted plan into the operation directory before starting the worker.
 - `builtin.classify.v1` classifies text/status-eligible direct files using deterministic path, file type, and optional summary signals.
 - `builtin.retrieval.v1` writes LLM-facing retrieval hints: retrieval terms, aliases, entities, and likely queries derived from bounded file text plus path/summary signals.
@@ -387,6 +388,10 @@ aascribe index methods
 aascribe --format json index methods --stage file
 aascribe index plan validate ./aascribe.index.toml
 aascribe index --index-plan ./aascribe.index.toml .
+aascribe index review ./coding --method builtin.retrieval.v1
+aascribe index review propose ./data/report/2026-05-19-retrieval-review.json
+aascribe index review patch ./data/report/2026-05-19-retrieval-prompt-proposal.json
+aascribe index review restore index-review-20260519T120000Z
 aascribe index --refresh .              # force re-summarize
 aascribe index dirty ./src              # mark existing metadata stale
 aascribe index eval ./src               # preview changed vs unchanged work

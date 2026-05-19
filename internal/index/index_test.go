@@ -183,6 +183,9 @@ func TestBuildWritesRetrievalMethod(t *testing.T) {
 - **starship** - Cross-shell prompt
 - **xh** - HTTP client
 - **zoxide** - Smarter cd command
+- [claude-code/](claude-code/) - Agent setup docs
+
+Example: fd "*.txt" - find text files
 
 Install Zed on WSL.
 `)
@@ -220,9 +223,14 @@ Install Zed on WSL.
 		t.Fatalf("marshal retrieval fields: %v", err)
 	}
 	fieldsText := string(fieldsJSON)
-	for _, want := range []string{`"from":"WSL"`, `"to":"Windows Subsystem for Linux"`, `"name":"starship"`, `"install zed in wsl"`} {
+	for _, want := range []string{`"from":"WSL"`, `"to":"Windows Subsystem for Linux"`, `"name":"starship"`, `"name":"xh"`, `"role":"HTTP client"`, `"install zed in wsl"`, `"which tool handles HTTP client"`} {
 		if !strings.Contains(fieldsText, want) {
 			t.Fatalf("expected retrieval fields to contain %q, got %s", want, fieldsText)
+		}
+	}
+	for _, unwanted := range []string{`Example`, `fd "*.txt"`, `[claude-code/](claude-code/`, `"from":"Example"`} {
+		if strings.Contains(fieldsText, unwanted) {
+			t.Fatalf("expected retrieval fields to exclude %q, got %s", unwanted, fieldsText)
 		}
 	}
 }
