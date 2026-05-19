@@ -176,6 +176,57 @@ func TestBuildWritesClassifyAndRoutingMethods(t *testing.T) {
 	}
 }
 
+func TestBuildWritesRetrievalMethod(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "docs", "tools.md"), `# Tools
+
+- **starship** - Cross-shell prompt
+- **xh** - HTTP client
+- **zoxide** - Smarter cd command
+
+Install Zed on WSL.
+`)
+
+	result, err := Build(Options{
+		Root:            root,
+		Depth:           2,
+		NoSummary:       true,
+		MaxFileSize:     4096,
+		MetadataMethods: []string{MethodBase, MethodRetrievalV1},
+	})
+	if err != nil {
+		t.Fatalf("expected build success, got %v", err)
+	}
+	if result.Run == nil || result.Run.MethodStatusCounts[MethodRetrievalV1+":ok"] != 1 {
+		t.Fatalf("expected retrieval method count, got %#v", result.Run)
+	}
+
+	meta := readMetadataFile(t, filepath.Join(root, "docs"))
+	if len(meta.Files) != 1 {
+		t.Fatalf("expected one metadata file, got %#v", meta.Files)
+	}
+	output, ok := meta.Files[0].Methods[MethodRetrievalV1]
+	if !ok {
+		t.Fatalf("expected retrieval method on file metadata, got %#v", meta.Files[0])
+	}
+	terms := stringSliceField(output.Fields["retrieval_terms"])
+	for _, want := range []string{"HTTP client", "shell prompt", "Smarter cd command", "Windows Subsystem for Linux"} {
+		if !containsString(terms, want) {
+			t.Fatalf("expected retrieval term %q in %#v", want, terms)
+		}
+	}
+	fieldsJSON, err := json.Marshal(output.Fields)
+	if err != nil {
+		t.Fatalf("marshal retrieval fields: %v", err)
+	}
+	fieldsText := string(fieldsJSON)
+	for _, want := range []string{`"from":"WSL"`, `"to":"Windows Subsystem for Linux"`, `"name":"starship"`, `"install zed in wsl"`} {
+		if !strings.Contains(fieldsText, want) {
+			t.Fatalf("expected retrieval fields to contain %q, got %s", want, fieldsText)
+		}
+	}
+}
+
 func TestBuildSelectedMethodPreventsOldMetadataReuse(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, "main.go"), "package main\n")
@@ -1695,6 +1746,15 @@ func requireChildByBase(t *testing.T, node IndexedPathNode, base string) Indexed
 func hasChildBase(node IndexedPathNode, base string) bool {
 	for _, child := range node.Children {
 		if filepath.Base(child.Path) == base {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
 			return true
 		}
 	}

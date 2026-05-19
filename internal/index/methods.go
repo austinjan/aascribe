@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	MethodBase       = "base"
-	MethodSummary    = "summary"
-	MethodClassifyV1 = "builtin.classify.v1"
-	MethodRoutingV1  = "builtin.routing.v1"
+	MethodBase        = "base"
+	MethodSummary     = "summary"
+	MethodClassifyV1  = "builtin.classify.v1"
+	MethodRetrievalV1 = "builtin.retrieval.v1"
+	MethodRoutingV1   = "builtin.routing.v1"
 )
 
 type MethodStage string
@@ -81,6 +82,7 @@ type FileMethodInput struct {
 	FileType    string `json:"file_type"`
 	ContentHash string `json:"content_hash"`
 	Summary     string `json:"summary,omitempty"`
+	Text        string `json:"text,omitempty"`
 	NoSummary   bool   `json:"no_summary"`
 	Status      string `json:"status"`
 }
@@ -129,6 +131,7 @@ func defaultMethodRegistry() methodRegistry {
 		},
 	}
 	reg.addFile(classifyMethodV1{})
+	reg.addFile(retrievalMethodV1{})
 	reg.addFolder(routingMethodV1{})
 	return reg
 }
@@ -202,8 +205,13 @@ func selectedMethodSet(opts Options) map[string]bool {
 }
 
 func stableInputHash(input any, method Method) string {
+	hashInput := input
+	if fileInput, ok := input.(FileMethodInput); ok {
+		fileInput.Text = ""
+		hashInput = fileInput
+	}
 	payload := map[string]any{
-		"input":       input,
+		"input":       hashInput,
 		"method_id":   method.ID(),
 		"fingerprint": method.Fingerprint(),
 	}
@@ -246,6 +254,44 @@ func (m classifyMethodV1) BuildFile(ctx context.Context, input FileMethodInput) 
 		"tags":       classifyTags(input, category),
 		"confidence": confidence,
 		"reason":     reason,
+	}, nil
+}
+
+type retrievalMethodV1 struct{}
+
+func (retrievalMethodV1) ID() string { return MethodRetrievalV1 }
+
+func (retrievalMethodV1) Fingerprint() string { return "builtin.retrieval.v1:deterministic:1" }
+
+func (retrievalMethodV1) Describe() MethodDescriptor {
+	return MethodDescriptor{
+		ID:                MethodRetrievalV1,
+		Stage:             MethodStageFile,
+		Scope:             "file",
+		Required:          false,
+		DefaultEnabled:    false,
+		AlwaysEnabled:     false,
+		RequiresSummary:   false,
+		SupportsNoSummary: true,
+		Description:       "Emits deterministic LLM-facing retrieval hints from path, summary, and bounded file text.",
+		Purpose:           "llm_retrieval_hints",
+		ConfigSchema: map[string]any{
+			"max_terms":   "integer",
+			"max_queries": "integer",
+		},
+	}
+}
+
+func (m retrievalMethodV1) BuildFile(ctx context.Context, input FileMethodInput) (MethodFields, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	hints := buildRetrievalHints(input)
+	return MethodFields{
+		"retrieval_terms": hints.terms,
+		"aliases":         hints.aliases,
+		"entities":        hints.entities,
+		"likely_queries":  hints.queries,
 	}, nil
 }
 
@@ -384,6 +430,204 @@ func classifyTags(input FileMethodInput, category string) []string {
 	}
 	sort.Strings(tags)
 	return tags
+}
+
+type retrievalHints struct {
+	terms    []string
+	aliases  []map[string]string
+	entities []map[string]string
+	queries  []string
+}
+
+func buildRetrievalHints(input FileMethodInput) retrievalHints {
+	source := strings.Join([]string{input.Path, input.Summary, input.Text}, "\n")
+	lowerSource := strings.ToLower(source)
+	terms := []string{}
+	queries := []string{}
+	aliases := []map[string]string{}
+	entities := []map[string]string{}
+
+	addTerm := func(term string) {
+		term = cleanRetrievalPhrase(term)
+		if term == "" {
+			return
+		}
+		addUniqueString(&terms, term)
+	}
+	addQuery := func(query string) {
+		query = cleanRetrievalPhrase(query)
+		if query == "" {
+			return
+		}
+		addUniqueString(&queries, query)
+	}
+	addAlias := func(from, to string) {
+		from = cleanRetrievalPhrase(from)
+		to = cleanRetrievalPhrase(to)
+		if from == "" || to == "" {
+			return
+		}
+		for _, alias := range aliases {
+			if alias["from"] == from && alias["to"] == to {
+				return
+			}
+		}
+		aliases = append(aliases, map[string]string{"from": from, "to": to})
+		addTerm(from)
+		addTerm(to)
+	}
+	addEntity := func(name, role string) {
+		name = cleanRetrievalName(name)
+		role = cleanRetrievalPhrase(role)
+		if name == "" {
+			return
+		}
+		role = truncatePhrase(role, 10)
+		for _, entity := range entities {
+			if entity["name"] == name && entity["role"] == role {
+				return
+			}
+		}
+		entities = append(entities, map[string]string{
+			"name": name,
+			"type": "tool_or_topic",
+			"role": role,
+		})
+		addTerm(name)
+		addTerm(role)
+		if role != "" {
+			addTerm(name + " " + role)
+			addQuery("find " + role)
+			addQuery("configure " + role)
+		}
+		if strings.Contains(lowerSource, "install") {
+			addQuery("install " + name)
+		}
+	}
+
+	for _, part := range strings.FieldsFunc(filepath.ToSlash(input.Path), func(r rune) bool {
+		return r == '/' || r == '.' || r == '-' || r == '_'
+	}) {
+		addTerm(part)
+	}
+
+	for _, line := range strings.Split(source, "\n") {
+		name, role, ok := parseRetrievalEntityLine(line)
+		if ok {
+			addEntity(name, role)
+		}
+	}
+
+	if strings.Contains(source, "WSL") || strings.Contains(lowerSource, "windows subsystem for linux") {
+		addAlias("WSL", "Windows Subsystem for Linux")
+		addTerm("linux development environment")
+		addQuery("set up editor on linux")
+	}
+	if strings.Contains(lowerSource, "zed") && strings.Contains(lowerSource, "wsl") {
+		addQuery("install zed in wsl")
+	}
+	for _, entity := range entities {
+		name := strings.ToLower(entity["name"])
+		role := strings.ToLower(entity["role"])
+		switch {
+		case name == "xh" || strings.Contains(role, "http"):
+			addAlias(entity["name"], "HTTP client")
+		case name == "starship" || strings.Contains(role, "prompt"):
+			addAlias(entity["name"], "cross-shell prompt")
+			addTerm("shell prompt")
+		case name == "zoxide" || strings.Contains(role, "cd command"):
+			addAlias(entity["name"], "directory navigation")
+			addTerm("smarter cd command")
+		}
+	}
+
+	sort.Strings(terms)
+	sort.Slice(aliases, func(i, j int) bool {
+		if aliases[i]["from"] == aliases[j]["from"] {
+			return aliases[i]["to"] < aliases[j]["to"]
+		}
+		return aliases[i]["from"] < aliases[j]["from"]
+	})
+	sort.Slice(entities, func(i, j int) bool {
+		if entities[i]["name"] == entities[j]["name"] {
+			return entities[i]["role"] < entities[j]["role"]
+		}
+		return entities[i]["name"] < entities[j]["name"]
+	})
+	sort.Strings(queries)
+
+	return retrievalHints{
+		terms:    limitStrings(terms, 32),
+		aliases:  limitStringMaps(aliases, 12),
+		entities: limitStringMaps(entities, 16),
+		queries:  limitStrings(queries, 16),
+	}
+}
+
+func parseRetrievalEntityLine(line string) (string, string, bool) {
+	line = strings.TrimSpace(line)
+	line = strings.TrimLeft(line, "-*0123456789. \t")
+	if line == "" {
+		return "", "", false
+	}
+	for _, sep := range []string{" - ", " – ", " — ", ": "} {
+		if before, after, ok := strings.Cut(line, sep); ok {
+			name := cleanRetrievalName(before)
+			role := cleanRetrievalPhrase(after)
+			if name != "" && role != "" && len(strings.Fields(name)) <= 4 {
+				return name, role, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func cleanRetrievalName(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, "`*_[](){}<>#")
+	value = strings.TrimSpace(strings.ReplaceAll(value, "**", ""))
+	return value
+}
+
+func cleanRetrievalPhrase(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, "`*_[](){}<>#.,;:")
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) < 2 {
+		return ""
+	}
+	return value
+}
+
+func truncatePhrase(value string, maxWords int) string {
+	words := strings.Fields(value)
+	if len(words) <= maxWords {
+		return strings.Join(words, " ")
+	}
+	return strings.Join(words[:maxWords], " ")
+}
+
+func addUniqueString(values *[]string, value string) {
+	for _, existing := range *values {
+		if strings.EqualFold(existing, value) {
+			return
+		}
+	}
+	*values = append(*values, value)
+}
+
+func limitStrings(values []string, limit int) []string {
+	if len(values) <= limit {
+		return values
+	}
+	return values[:limit]
+}
+
+func limitStringMaps(values []map[string]string, limit int) []map[string]string {
+	if len(values) <= limit {
+		return values
+	}
+	return values[:limit]
 }
 
 func dominantKey(counts map[string]int) string {

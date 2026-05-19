@@ -242,7 +242,7 @@ func TestRunIndexMethodsListsDescriptors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected index methods success, got %v", err)
 	}
-	if !strings.Contains(result.Text, "builtin.classify.v1") || !strings.Contains(result.Text, "description:") {
+	if !strings.Contains(result.Text, "builtin.classify.v1") || !strings.Contains(result.Text, "builtin.retrieval.v1") || !strings.Contains(result.Text, "description:") {
 		t.Fatalf("expected descriptor text, got %q", result.Text)
 	}
 	data, ok := result.Data.(map[string]any)

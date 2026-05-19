@@ -125,10 +125,11 @@ type IndexCommand struct {
 func (c IndexCommand) Name() string { return "index" }
 
 const (
-	MetadataMethodBase       = "base"
-	MetadataMethodSummary    = "summary"
-	MetadataMethodClassifyV1 = "builtin.classify.v1"
-	MetadataMethodRoutingV1  = "builtin.routing.v1"
+	MetadataMethodBase        = "base"
+	MetadataMethodSummary     = "summary"
+	MetadataMethodClassifyV1  = "builtin.classify.v1"
+	MetadataMethodRetrievalV1 = "builtin.retrieval.v1"
+	MetadataMethodRoutingV1   = "builtin.routing.v1"
 )
 
 func (c IndexCommand) EffectiveMetadataMethods() []string {
@@ -817,7 +818,7 @@ Behavior:
   Detect text files from file content instead of filename extension.
   Write .aascribe_index_meta.json in each indexed folder with local-only metadata for that folder.
   With no metadata method flags, use the default methods: base metadata plus summary.
-  Supported methods in this build are base, summary, builtin.classify.v1, and builtin.routing.v1. Base metadata always runs.
+  Supported methods in this build are base, summary, builtin.classify.v1, builtin.retrieval.v1, and builtin.routing.v1. Base metadata always runs.
   Use --index-plan to run built-in methods listed in an index-plan-v1 TOML file.
   Use index methods to list method descriptions in text or JSON form.
   Use index plan validate to check an index-plan-v1 TOML file without running index.
@@ -857,6 +858,7 @@ Agent Workflow:
   1. Ask the user what the index should optimize for:
      - fast local structure only
      - agent file routing and classification
+     - LLM retrieval hints for future repo questions
      - summary-backed repo understanding
   2. Discover available methods:
      aascribe --format json index methods
@@ -882,6 +884,7 @@ Current Plan Format:
   [methods]
   enabled = [
     "builtin.classify.v1",
+    "builtin.retrieval.v1",
     "builtin.routing.v1"
   ]
 
@@ -890,17 +893,19 @@ Rules:
   - base metadata always runs; including "base" is optional and usually unnecessary.
   - "summary" enables LLM-backed file summaries and requires configured LLM credentials.
   - "builtin.classify.v1" performs deterministic file classification.
+  - "builtin.retrieval.v1" emits LLM-facing retrieval terms, aliases, entities, and likely queries from bounded file text.
   - "builtin.routing.v1" aggregates folder routing metadata.
   - Do not enable lifecycle start/end methods until they appear in aascribe --format json index methods.
-  - Custom/external method descriptors are future-facing and are not executable in v2.1.
+  - Custom/external method descriptors are future-facing and are not executable in this build.
 
 Examples:
-  Fast routing without LLM:
+  Fast LLM retrieval hints without summary:
     version = "index-plan-v1"
 
     [methods]
     enabled = [
       "builtin.classify.v1",
+      "builtin.retrieval.v1",
       "builtin.routing.v1"
     ]
 
@@ -911,6 +916,7 @@ Examples:
     enabled = [
       "summary",
       "builtin.classify.v1",
+      "builtin.retrieval.v1",
       "builtin.routing.v1"
     ]
 
@@ -1691,7 +1697,7 @@ func parseIndex(args []string) (Command, error) {
 		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--index-plan", "--index-plan cannot be used with --no-metadata-methods.")
 	}
 	for _, method := range metadataMethods {
-		if !oneOf(method, MetadataMethodBase, MetadataMethodSummary, MetadataMethodClassifyV1, MetadataMethodRoutingV1) {
+		if !oneOf(method, MetadataMethodBase, MetadataMethodSummary, MetadataMethodClassifyV1, MetadataMethodRetrievalV1, MetadataMethodRoutingV1) {
 			return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--metadata-method", "Unsupported metadata method: %s.", method)
 		}
 	}

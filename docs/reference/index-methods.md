@@ -4,7 +4,7 @@ Status: Proposed design reference
 
 This document describes the `aascribe index` method model: what index methods are, how file and folder methods differ, how lifecycle hooks work, and what an AI agent needs to know before generating an index plan.
 
-The current implementation supports the built-in `base`, `summary`, `builtin.classify.v1`, and `builtin.routing.v1` methods, the `aascribe index methods` discovery command, and `index-plan-v1` validation/execution through `--index-plan`. Lifecycle hooks, LLM-backed classifiers, and custom/external method execution remain planned work tracked in [../tasks/index-metadata-model-tasks.md](../tasks/index-metadata-model-tasks.md).
+The current implementation supports the built-in `base`, `summary`, `builtin.classify.v1`, `builtin.retrieval.v1`, and `builtin.routing.v1` methods, the `aascribe index methods` discovery command, and `index-plan-v1` validation/execution through `--index-plan`. Lifecycle hooks, LLM-backed classifiers, and custom/external method execution remain planned work tracked in [../tasks/index-metadata-model-tasks.md](../tasks/index-metadata-model-tasks.md).
 
 `aascribe --format json index methods` is the source of truth for currently available methods. This document is orientation and design guidance.
 
@@ -102,6 +102,7 @@ The first implemented methods are:
 | `base` | `file` | yes | yes | no | Records path, size, mod time, content hash, file type, status, skip reason, and error state. |
 | `summary` | `file` | no | yes | no | Produces file summaries through the configured LLM summarizer. |
 | `builtin.classify.v1` | `file` | no | no | no | Classifies text/status-eligible files for agent routing using deterministic path, file type, and optional summary signals. |
+| `builtin.retrieval.v1` | `file` | no | no | no | Emits LLM-facing retrieval terms, aliases, entities, and likely queries from bounded file text plus path/summary signals. |
 | `builtin.routing.v1` | `folder` | no | no | no | Aggregates child classifier output into category counts, tag counts, dominant category, low-confidence counts, and uncategorized counts. |
 
 `base` always runs. Passing `--metadata-method base` is accepted for compatibility but is a no-op.
@@ -196,6 +197,12 @@ available index methods:
   default_enabled: false
   requires_summary: false
   description: Classifies each text file for agent routing using path, file type, and optional summary signals.
+
+- builtin.retrieval.v1
+  stage: file
+  default_enabled: false
+  requires_summary: false
+  description: Emits deterministic LLM-facing retrieval hints from path, summary, and bounded file text.
 
 - builtin.routing.v1
   stage: folder
@@ -319,6 +326,7 @@ version = "index-plan-v1"
 [methods]
 enabled = [
   "builtin.classify.v1",
+  "builtin.retrieval.v1",
   "builtin.routing.v1"
 ]
 ```
@@ -332,6 +340,7 @@ version = "index-plan-v1"
 enabled = [
   "summary",
   "builtin.classify.v1",
+  "builtin.retrieval.v1",
   "builtin.routing.v1"
 ]
 ```
@@ -414,7 +423,7 @@ aascribe index . --no-metadata-methods   # base only
 aascribe index . --metadata-method summary
 aascribe index . --metadata-method base  # accepted no-op; base always runs
 aascribe index . --metadata-method builtin.classify.v1
-aascribe index . --metadata-method builtin.classify.v1 --metadata-method builtin.routing.v1
+aascribe index . --metadata-method builtin.classify.v1 --metadata-method builtin.retrieval.v1 --metadata-method builtin.routing.v1
 aascribe index methods
 aascribe index plan validate ./aascribe.index.toml
 aascribe index . --index-plan ./aascribe.index.toml
@@ -425,6 +434,7 @@ Currently accepted method ids:
 - `base`
 - `summary`
 - `builtin.classify.v1`
+- `builtin.retrieval.v1`
 - `builtin.routing.v1`
 
 Planned behavior adds:

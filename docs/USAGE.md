@@ -343,7 +343,7 @@ aascribe index eval <path>
 | `--async` | off | Start indexing as a persisted operation and return an `operation_id` immediately |
 | `--refresh` | off | Ignore cache; regenerate summaries |
 | `--no-summary` | off | Return structure only. Much faster |
-| `--metadata-method <method>` | default set | Select explicit metadata methods. Repeatable. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.routing.v1` |
+| `--metadata-method <method>` | default set | Select explicit metadata methods. Repeatable. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.retrieval.v1`, `builtin.routing.v1` |
 | `--no-metadata-methods` | off | Disable optional/default methods beyond required base metadata |
 | `--index-plan <file>` | off | Use an `index-plan-v1` TOML file to select built-in methods |
 | `--max-file-size <bytes>` | `1048576` | Files over this size get metadata only, no summary |
@@ -361,6 +361,7 @@ Behavior notes:
 - `index plan --help` is written as an AI-agent contract for discovering methods, drafting TOML, validating, revising, and only then running the plan.
 - Async `--index-plan` runs snapshot the submitted plan into the operation directory before starting the worker.
 - `builtin.classify.v1` classifies text/status-eligible direct files using deterministic path, file type, and optional summary signals.
+- `builtin.retrieval.v1` writes LLM-facing retrieval hints: retrieval terms, aliases, entities, and likely queries derived from bounded file text plus path/summary signals.
 - `builtin.routing.v1` writes folder-level routing metadata by aggregating child classification output.
 - `index methods` lists available methods with descriptions; use `--format json` for machine-readable descriptors.
 - `summary` is LLM-backed. If LLM config or the configured API-key environment variable is missing, summary-enabled indexing returns an error instead of using a local fallback summary.
@@ -381,7 +382,7 @@ aascribe index --concurrency 8 ./src
 aascribe index --async ./src
 aascribe index --no-summary .           # structure-only, fast
 aascribe index --metadata-method summary .
-aascribe index --metadata-method builtin.classify.v1 --metadata-method builtin.routing.v1 .
+aascribe index --metadata-method builtin.classify.v1 --metadata-method builtin.retrieval.v1 --metadata-method builtin.routing.v1 .
 aascribe index methods
 aascribe --format json index methods --stage file
 aascribe index plan validate ./aascribe.index.toml

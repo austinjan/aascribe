@@ -196,6 +196,7 @@ type fileAnalysis struct {
 	hash        string
 	fileType    string
 	summary     string
+	text        string
 	generatedAt string
 	notIndexed  string
 }
@@ -941,6 +942,7 @@ func analyzeFile(ctx context.Context, absPath, displayPath string, maxFileSize i
 		result.notIndexed = reason
 		return result, nil
 	}
+	result.text = truncateRunes(normalizeWhitespace(string(content)), 12000)
 	if summarizer != nil {
 		if err := ctx.Err(); err != nil {
 			return nil, apperr.IOError("Index canceled: %v.", err)
@@ -1039,6 +1041,17 @@ func truncateWords(input string, maxWords int) string {
 		return strings.Join(words, " ")
 	}
 	return strings.Join(words[:maxWords], " ") + "..."
+}
+
+func truncateRunes(input string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(input)
+	if len(runes) <= maxRunes {
+		return input
+	}
+	return string(runes[:maxRunes])
 }
 
 func isBinary(content []byte) bool {
@@ -1273,6 +1286,7 @@ func runFileMethods(analysis *fileAnalysis, status string, opts Options, timesta
 		FileType:    analysis.fileType,
 		ContentHash: analysis.hash,
 		Summary:     analysis.summary,
+		Text:        analysis.text,
 		NoSummary:   opts.NoSummary,
 		Status:      status,
 	}

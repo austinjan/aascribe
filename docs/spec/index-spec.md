@@ -46,7 +46,7 @@ aascribe index plan validate <file>
 | `--async`         | bool       | `false`     | Start indexing as a persisted operation and return `OperationAccepted`.   |
 | `--refresh`       | bool       | `false`     | Reserved for incremental re-indexing. Accepted but not yet consumed.     |
 | `--no-summary`    | bool       | `false`     | Skip all summarization. Files are still walked, hashed, and recorded.    |
-| `--metadata-method` | string (×N) | default set | Select explicit metadata methods. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.routing.v1`. |
+| `--metadata-method` | string (×N) | default set | Select explicit metadata methods. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.retrieval.v1`, `builtin.routing.v1`. |
 | `--no-metadata-methods` | bool | `false` | Disable optional/default methods beyond required base metadata. |
 | `--index-plan` | path | off | Read an `index-plan-v1` TOML file and use `[methods].enabled` as the method selection. |
 | `--max-file-size` | int64      | `1_048_576` | Byte ceiling for summarization. `0` is valid; negative is rejected.      |
@@ -60,6 +60,7 @@ Metadata method selection:
 - `summary` runs by default and requires a configured LLM provider. If LLM config or the configured API-key environment variable is unavailable, summary-enabled indexing fails instead of using a local fake summary.
 - `summary` is disabled by `--no-summary`, `--no-metadata-methods`, or by an explicit metadata method list that omits `summary`.
 - `builtin.classify.v1` is an optional deterministic file method. It does not require summary and can run from path/file-type signals under `--no-summary`.
+- `builtin.retrieval.v1` is an optional deterministic file method. It does not require summary and emits LLM-facing retrieval terms, aliases, entities, and likely queries from bounded file text plus path/summary signals.
 - `builtin.routing.v1` is an optional deterministic folder method. It aggregates child classification fields into category counts, tag counts, dominant category, low-confidence counts, and uncategorized counts.
 - When one or more `--metadata-method` flags are provided, `index` uses the requested method set plus required `base`.
 - `--metadata-method` and `--no-metadata-methods` are mutually exclusive.

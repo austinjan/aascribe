@@ -308,7 +308,7 @@ v1 optional method enablement:
 
 ```bash
 aascribe index <path> --metadata-method builtin.classify.v1
-aascribe index <path> --metadata-method builtin.classify.v1 --metadata-method builtin.routing.v1
+aascribe index <path> --metadata-method builtin.classify.v1 --metadata-method builtin.retrieval.v1 --metadata-method builtin.routing.v1
 aascribe index <path> --metadata-method summary --metadata-method builtin.classify.v1
 ```
 
@@ -336,6 +336,12 @@ available index methods:
   default_enabled: false
   requires_summary: false
   description: Classifies each text file for agent routing using path, file type, and optional summary signals.
+
+- builtin.retrieval.v1
+  stage: file
+  default_enabled: false
+  requires_summary: false
+  description: Emits deterministic LLM-facing retrieval hints from path, summary, and bounded file text.
 
 - builtin.routing.v1
   stage: folder
@@ -396,6 +402,7 @@ version = "index-plan-v1"
 enabled = [
   "summary",
   "builtin.classify.v1",
+  "builtin.retrieval.v1",
   "builtin.routing.v1"
 ]
 
