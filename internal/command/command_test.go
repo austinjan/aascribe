@@ -260,6 +260,118 @@ func TestRunIndexMethodsListsDescriptors(t *testing.T) {
 	}
 }
 
+func TestRunIndexPlanValidate(t *testing.T) {
+	root := t.TempDir()
+	planPath := filepath.Join(root, "aascribe.index.toml")
+	if err := os.WriteFile(planPath, []byte(`version = "index-plan-v1"
+
+[methods]
+enabled = ["builtin.classify.v1"]
+`), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	result, err := runIndexPlanValidate(cli.IndexPlanValidateCommand{Path: planPath})
+	if err != nil {
+		t.Fatalf("expected validation success, got %v", err)
+	}
+	if !strings.Contains(result.Text, "index plan valid") || !strings.Contains(result.Text, "builtin.classify.v1") {
+		t.Fatalf("unexpected validation text: %q", result.Text)
+	}
+}
+
+func TestRunIndexUsesIndexPlan(t *testing.T) {
+	storePath := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	planPath := filepath.Join(root, "aascribe.index.toml")
+	if err := os.WriteFile(planPath, []byte(`version = "index-plan-v1"
+
+[methods]
+enabled = ["builtin.classify.v1", "builtin.routing.v1"]
+`), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	result, err := runIndex(storePath, cli.IndexCommand{
+		Path:        root,
+		Depth:       1,
+		MaxFileSize: 1024,
+		IndexPlan:   planPath,
+	})
+	if err != nil {
+		t.Fatalf("expected index plan run success, got %v", err)
+	}
+	tree, ok := result.Data.(*index.PathIndexTree)
+	if !ok {
+		t.Fatalf("expected PathIndexTree, got %T", result.Data)
+	}
+	if tree.Run == nil || tree.Run.MethodStatusCounts["builtin.classify.v1:ok"] == 0 || tree.Run.MethodStatusCounts["builtin.routing.v1:ok"] == 0 {
+		t.Fatalf("expected plan-selected method counts, got %#v", tree.Run)
+	}
+	report, err := os.ReadFile(tree.ReportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	reportText := string(report)
+	for _, want := range []string{
+		"- index_plan: " + planPath,
+		"- index_plan_digest: sha256:",
+		"- metadata_methods: [base, builtin.classify.v1, builtin.routing.v1]",
+	} {
+		if !strings.Contains(reportText, want) {
+			t.Fatalf("expected report to contain %q, got:\n%s", want, reportText)
+		}
+	}
+}
+
+func TestRunIndexAsyncSnapshotsIndexPlan(t *testing.T) {
+	storePath := t.TempDir()
+	root := t.TempDir()
+	planPath := filepath.Join(root, "aascribe.index.toml")
+	if err := os.WriteFile(planPath, []byte(`version = "index-plan-v1"
+
+[methods]
+enabled = ["builtin.classify.v1"]
+`), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	var startedOperation string
+	var startedCommand cli.IndexCommand
+	original := startAsyncIndexProcess
+	startAsyncIndexProcess = func(storePath, operationID string, cmd cli.IndexCommand) error {
+		startedOperation = operationID
+		startedCommand = cmd
+		return nil
+	}
+	defer func() {
+		startAsyncIndexProcess = original
+	}()
+
+	_, err := runIndex(storePath, cli.IndexCommand{
+		Path:        root,
+		Depth:       1,
+		MaxFileSize: 1024,
+		Async:       true,
+		IndexPlan:   planPath,
+	})
+	if err != nil {
+		t.Fatalf("expected async index accepted, got %v", err)
+	}
+	if startedOperation == "" {
+		t.Fatalf("expected worker start")
+	}
+	if filepath.Base(startedCommand.IndexPlan) != "index-plan.toml" || startedCommand.IndexPlan == planPath {
+		t.Fatalf("expected snapshotted plan path, got %#v", startedCommand)
+	}
+	if _, err := os.Stat(startedCommand.IndexPlan); err != nil {
+		t.Fatalf("expected snapshotted plan file: %v", err)
+	}
+}
+
 func TestRunIndexAsyncCreatesOperationAndStartsWorker(t *testing.T) {
 	storePath := t.TempDir()
 	root := t.TempDir()
@@ -339,6 +451,27 @@ func TestIndexArgsPreservesNoMetadataMethodsFlag(t *testing.T) {
 	rendered := strings.Join(args, " ")
 	if !strings.Contains(rendered, "--no-metadata-methods") {
 		t.Fatalf("expected no metadata methods flag in args, got %#v", args)
+	}
+	if args[len(args)-1] != "./tests" {
+		t.Fatalf("expected path to remain last, got %#v", args)
+	}
+}
+
+func TestIndexArgsPreservesIndexPlanWithoutManualMethods(t *testing.T) {
+	args := indexArgs(cli.IndexCommand{
+		Path:            "./tests",
+		Depth:           2,
+		Concurrency:     4,
+		MaxFileSize:     1024,
+		IndexPlan:       "./aascribe.index.toml",
+		MetadataMethods: []string{"builtin.classify.v1"},
+	})
+	rendered := strings.Join(args, " ")
+	if !strings.Contains(rendered, "--index-plan ./aascribe.index.toml") {
+		t.Fatalf("expected index plan flag in args, got %#v", args)
+	}
+	if strings.Contains(rendered, "--metadata-method") {
+		t.Fatalf("did not expect metadata method flags when index plan is present, got %#v", args)
 	}
 	if args[len(args)-1] != "./tests" {
 		t.Fatalf("expected path to remain last, got %#v", args)

@@ -118,6 +118,8 @@ type IndexCommand struct {
 	MaxFileSize       int64
 	MetadataMethods   []string
 	NoMetadataMethods bool
+	IndexPlan         string
+	IndexPlanDigest   string
 }
 
 func (c IndexCommand) Name() string { return "index" }
@@ -193,6 +195,12 @@ type IndexMethodsCommand struct {
 }
 
 func (c IndexMethodsCommand) Name() string { return "index" }
+
+type IndexPlanValidateCommand struct {
+	Path string
+}
+
+func (c IndexPlanValidateCommand) Name() string { return "index" }
 
 type IndexMapCommand struct {
 	Path string
@@ -797,8 +805,9 @@ Purpose:
   Prepare repository content for faster later retrieval by walking one directory tree, summarizing direct files per folder, and recording local-only index metadata.
 
 Usage:
-  aascribe index <path> [--depth <n>] [--include <glob>] [--exclude <glob>] [--refresh] [--no-summary] [--metadata-method <method>] [--no-metadata-methods] [--max-file-size <bytes>]
+  aascribe index <path> [--depth <n>] [--include <glob>] [--exclude <glob>] [--refresh] [--no-summary] [--metadata-method <method>] [--no-metadata-methods] [--index-plan <file>] [--max-file-size <bytes>]
   aascribe index methods [--stage file|folder|start|end]
+  aascribe index plan validate <file>
   aascribe index dirty <path>
   aascribe index eval <path>
   aascribe index clean <path> [--dry-run] --force
@@ -809,7 +818,9 @@ Behavior:
   Write .aascribe_index_meta.json in each indexed folder with local-only metadata for that folder.
   With no metadata method flags, use the default methods: base metadata plus summary.
   Supported methods in this build are base, summary, builtin.classify.v1, and builtin.routing.v1. Base metadata always runs.
+  Use --index-plan to run built-in methods listed in an index-plan-v1 TOML file.
   Use index methods to list method descriptions in text or JSON form.
+  Use index plan validate to check an index-plan-v1 TOML file without running index.
   Use --concurrency to bound direct-file processing across the whole index run.
   Use --async to start index as an operation and inspect it later with operation status/events/result.
   Use index dirty to mark existing metadata stale so the next index run rebuilds it.
@@ -822,6 +833,8 @@ Examples:
   aascribe index --concurrency 4 ./internal
   aascribe index --async ./internal
   aascribe index methods
+  aascribe index plan validate ./aascribe.index.toml
+  aascribe index --index-plan ./aascribe.index.toml ./internal
   aascribe --format json index methods --stage file
   aascribe --store ./project-mem index --exclude vendor .
   aascribe index dirty ./internal
@@ -1497,6 +1510,9 @@ func parseIndex(args []string) (Command, error) {
 	if len(args) > 0 && args[0] == "methods" {
 		return parseIndexMethods(args[1:])
 	}
+	if len(args) > 0 && args[0] == "plan" {
+		return parseIndexPlan(args[1:])
+	}
 	if len(args) > 0 && args[0] == "map" {
 		return parseMap(args[1:])
 	}
@@ -1517,6 +1533,7 @@ func parseIndex(args []string) (Command, error) {
 	fs.BoolVar(&cmd.Refresh, "refresh", false, "")
 	fs.BoolVar(&cmd.NoSummary, "no-summary", false, "")
 	fs.BoolVar(&cmd.NoMetadataMethods, "no-metadata-methods", false, "")
+	fs.StringVar(&cmd.IndexPlan, "index-plan", "", "")
 	fs.Int64Var(&cmd.MaxFileSize, "max-file-size", 1_048_576, "")
 	if err := parseFlags(fs, args); err != nil {
 		return nil, err
@@ -1529,6 +1546,12 @@ func parseIndex(args []string) (Command, error) {
 	}
 	if cmd.NoMetadataMethods && len(metadataMethods) > 0 {
 		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--metadata-method", "--metadata-method cannot be used with --no-metadata-methods.")
+	}
+	if cmd.IndexPlan != "" && len(metadataMethods) > 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--index-plan", "--index-plan cannot be used with --metadata-method.")
+	}
+	if cmd.IndexPlan != "" && cmd.NoMetadataMethods {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--index-plan", "--index-plan cannot be used with --no-metadata-methods.")
 	}
 	for _, method := range metadataMethods {
 		if !oneOf(method, MetadataMethodBase, MetadataMethodSummary, MetadataMethodClassifyV1, MetadataMethodRoutingV1) {
@@ -1572,6 +1595,20 @@ func parseIndexMethods(args []string) (Command, error) {
 		return nil, newParseError(ParseErrorInvalidFlagValue, "index methods", "--stage", "Invalid value for --stage: %s.", cmd.Stage)
 	}
 	return cmd, nil
+}
+
+func parseIndexPlan(args []string) (Command, error) {
+	if len(args) == 0 || args[0] != "validate" {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "index plan", "subcommand", "index plan requires a subcommand: validate.")
+	}
+	fs := newFlagSet("index plan validate")
+	if err := parseFlags(fs, args[1:]); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 1 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "index plan validate", "path", "index plan validate requires exactly one plan path.")
+	}
+	return IndexPlanValidateCommand{Path: fs.Args()[0]}, nil
 }
 
 func parseIndexMap(args []string) (Command, error) {

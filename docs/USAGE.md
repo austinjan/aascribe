@@ -345,6 +345,7 @@ aascribe index eval <path>
 | `--no-summary` | off | Return structure only. Much faster |
 | `--metadata-method <method>` | default set | Select explicit metadata methods. Repeatable. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.routing.v1` |
 | `--no-metadata-methods` | off | Disable optional/default methods beyond required base metadata |
+| `--index-plan <file>` | off | Use an `index-plan-v1` TOML file to select built-in methods |
 | `--max-file-size <bytes>` | `1048576` | Files over this size get metadata only, no summary |
 
 Behavior notes:
@@ -355,6 +356,9 @@ Behavior notes:
 - With no metadata method flags, `index` uses the default method set: required `base` metadata plus `summary`.
 - If `--metadata-method` flags are provided, `index` uses those methods plus required `base`.
 - `--no-metadata-methods` keeps only required `base` metadata.
+- `--index-plan` is mutually exclusive with `--metadata-method` and `--no-metadata-methods`.
+- `index plan validate <file>` validates an `index-plan-v1` TOML file without running index.
+- Async `--index-plan` runs snapshot the submitted plan into the operation directory before starting the worker.
 - `builtin.classify.v1` classifies text/status-eligible direct files using deterministic path, file type, and optional summary signals.
 - `builtin.routing.v1` writes folder-level routing metadata by aggregating child classification output.
 - `index methods` lists available methods with descriptions; use `--format json` for machine-readable descriptors.
@@ -379,6 +383,8 @@ aascribe index --metadata-method summary .
 aascribe index --metadata-method builtin.classify.v1 --metadata-method builtin.routing.v1 .
 aascribe index methods
 aascribe --format json index methods --stage file
+aascribe index plan validate ./aascribe.index.toml
+aascribe index --index-plan ./aascribe.index.toml .
 aascribe index --refresh .              # force re-summarize
 aascribe index dirty ./src              # mark existing metadata stale
 aascribe index eval ./src               # preview changed vs unchanged work

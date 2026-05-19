@@ -25,6 +25,7 @@ aascribe index <path>
   [--no-summary]
   [--metadata-method <method>]...
   [--no-metadata-methods]
+  [--index-plan <file>]
   [--max-file-size <bytes>]
 ```
 
@@ -33,6 +34,7 @@ Discovery:
 ```text
 aascribe index methods [--stage file|folder|start|end]
 aascribe --format json index methods [--stage file|folder|start|end]
+aascribe index plan validate <file>
 ```
 
 | Flag              | Type       | Default     | Meaning                                                                 |
@@ -46,6 +48,7 @@ aascribe --format json index methods [--stage file|folder|start|end]
 | `--no-summary`    | bool       | `false`     | Skip all summarization. Files are still walked, hashed, and recorded.    |
 | `--metadata-method` | string (×N) | default set | Select explicit metadata methods. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.routing.v1`. |
 | `--no-metadata-methods` | bool | `false` | Disable optional/default methods beyond required base metadata. |
+| `--index-plan` | path | off | Read an `index-plan-v1` TOML file and use `[methods].enabled` as the method selection. |
 | `--max-file-size` | int64      | `1_048_576` | Byte ceiling for summarization. `0` is valid; negative is rejected.      |
 
 Exactly one positional path argument is required. Zero or multiple positional args return a parse error.
@@ -60,6 +63,9 @@ Metadata method selection:
 - `builtin.routing.v1` is an optional deterministic folder method. It aggregates child classification fields into category counts, tag counts, dominant category, low-confidence counts, and uncategorized counts.
 - When one or more `--metadata-method` flags are provided, `index` uses the requested method set plus required `base`.
 - `--metadata-method` and `--no-metadata-methods` are mutually exclusive.
+- `--index-plan` is mutually exclusive with `--metadata-method` and `--no-metadata-methods`.
+- `index plan validate <file>` validates version, enabled method ids, duplicate custom ids, custom descriptor shape, and duplicate enabled methods without running index.
+- Async `--index-plan` snapshots the submitted plan into the operation directory and the worker reads the snapshot.
 - `aascribe index methods` lists method descriptors. Text output is human/agent-readable; JSON output exposes the descriptor payload used by callers.
 
 When `--async` is set, the parent command creates a persisted operation under the active store, starts a background index worker process, and returns an `OperationAccepted` payload. The worker writes lifecycle snapshots to `<store>/operations/<operation-id>/operation.json`, event history to `events.jsonl`, and the final `PathIndexTree` result to `result.json`.

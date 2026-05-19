@@ -126,6 +126,8 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 		return runIndexEval(cmd)
 	case cli.IndexMethodsCommand:
 		return runIndexMethods(cmd)
+	case cli.IndexPlanValidateCommand:
+		return runIndexPlanValidate(cmd)
 	case cli.IndexMapCommand:
 		return runIndexMap(cmd)
 	case cli.MapCommand:
@@ -157,9 +159,29 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 
 var startAsyncIndexProcess = startIndexWorkerProcess
 
+func resolveIndexPlan(cmd cli.IndexCommand) (cli.IndexCommand, error) {
+	if strings.TrimSpace(cmd.IndexPlan) == "" {
+		return cmd, nil
+	}
+	validation, err := index.ValidateIndexPlanFile(cmd.IndexPlan)
+	if err != nil {
+		return cmd, err
+	}
+	cmd.IndexPlan = validation.Path
+	cmd.IndexPlanDigest = validation.Digest
+	cmd.MetadataMethods = validation.Plan.Methods.Enabled
+	cmd.NoMetadataMethods = false
+	return cmd, nil
+}
+
 func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, error) {
 	if cmd.Async {
 		return runIndexAsync(storePath, cmd)
+	}
+	var err error
+	cmd, err = resolveIndexPlan(cmd)
+	if err != nil {
+		return nil, err
 	}
 	usage := &tokenUsageTracker{}
 	noSummary := cmd.EffectiveNoSummary()
@@ -229,7 +251,29 @@ func runIndexMethods(cmd cli.IndexMethodsCommand) (*output.CommandResult, error)
 	}, nil
 }
 
+func runIndexPlanValidate(cmd cli.IndexPlanValidateCommand) (*output.CommandResult, error) {
+	validation, err := index.ValidateIndexPlanFile(cmd.Path)
+	if err != nil {
+		return nil, err
+	}
+	text := strings.Join([]string{
+		"index plan valid",
+		"path: " + validation.Path,
+		"digest: " + validation.Digest,
+		"enabled_methods: " + stringListText(validation.Plan.Methods.Enabled),
+	}, "\n")
+	return &output.CommandResult{
+		Data: validation,
+		Text: text,
+	}, nil
+}
+
 func runIndexAsync(storePath string, cmd cli.IndexCommand) (*output.CommandResult, error) {
+	var err error
+	cmd, err = resolveIndexPlan(cmd)
+	if err != nil {
+		return nil, err
+	}
 	accepted, err := operation.Create(storePath, operation.CreateInput{
 		Command: "index",
 		Stage:   "queued",
@@ -238,6 +282,13 @@ func runIndexAsync(storePath string, cmd cli.IndexCommand) (*output.CommandResul
 	})
 	if err != nil {
 		return nil, err
+	}
+	if cmd.IndexPlan != "" {
+		snapshotPath, err := operation.SnapshotFile(storePath, accepted.OperationID, cmd.IndexPlan, "index-plan.toml")
+		if err != nil {
+			return nil, err
+		}
+		cmd.IndexPlan = snapshotPath
 	}
 	if err := startAsyncIndexProcess(storePath, accepted.OperationID, cmd); err != nil {
 		status, loadErr := operation.LoadStatus(storePath, accepted.OperationID)
@@ -308,17 +359,26 @@ func indexArgs(cmd cli.IndexCommand) []string {
 	if cmd.NoSummary {
 		args = append(args, "--no-summary")
 	}
-	for _, method := range cmd.MetadataMethods {
-		args = append(args, "--metadata-method", method)
-	}
-	if cmd.NoMetadataMethods {
-		args = append(args, "--no-metadata-methods")
+	if cmd.IndexPlan != "" {
+		args = append(args, "--index-plan", cmd.IndexPlan)
+	} else {
+		for _, method := range cmd.MetadataMethods {
+			args = append(args, "--metadata-method", method)
+		}
+		if cmd.NoMetadataMethods {
+			args = append(args, "--no-metadata-methods")
+		}
 	}
 	args = append(args, cmd.Path)
 	return args
 }
 
 func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (*output.CommandResult, error) {
+	var err error
+	cmd, err = resolveIndexPlan(cmd)
+	if err != nil {
+		return nil, err
+	}
 	reporter := operation.NewReporter(storePath, operationID)
 	status, err := operation.LoadStatus(storePath, operationID)
 	if err != nil {
@@ -1232,6 +1292,14 @@ func renderIndexCompletionReport(cmd cli.IndexCommand, result *index.PathIndexTr
 		"- finished_at: "+run.FinishedAt,
 		"- elapsed: "+elapsedText(run.StartedAt, run.FinishedAt),
 		"- report_path: "+reportPath,
+	)
+	if cmd.IndexPlan != "" {
+		lines = append(lines, "- index_plan: "+cmd.IndexPlan)
+	}
+	if cmd.IndexPlanDigest != "" {
+		lines = append(lines, "- index_plan_digest: "+cmd.IndexPlanDigest)
+	}
+	lines = append(lines,
 		"",
 		"## File Counts",
 		"",

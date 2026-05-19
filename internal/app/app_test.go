@@ -256,6 +256,31 @@ func TestParseIndexMethods(t *testing.T) {
 	}
 }
 
+func TestParseIndexPlanValidate(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "plan", "validate", "./aascribe.index.toml"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.IndexPlanValidateCommand)
+	if !ok {
+		t.Fatalf("expected index plan validate command, got %#v", parsed.Command)
+	}
+	if cmd.Path != "./aascribe.index.toml" {
+		t.Fatalf("unexpected plan path: %#v", cmd)
+	}
+}
+
+func TestParseIndexPlanRejectsManualMethodSelection(t *testing.T) {
+	_, err := cli.Parse([]string{"index", ".", "--index-plan", "./plan.toml", "--metadata-method", "builtin.classify.v1"})
+	if err == nil {
+		t.Fatalf("expected --index-plan and --metadata-method conflict")
+	}
+	_, err = cli.Parse([]string{"index", ".", "--index-plan", "./plan.toml", "--no-metadata-methods"})
+	if err == nil {
+		t.Fatalf("expected --index-plan and --no-metadata-methods conflict")
+	}
+}
+
 func TestParseIndexNoMetadataMethodsKeepsBaseOnly(t *testing.T) {
 	parsed, err := cli.Parse([]string{"index", "./tests", "--no-metadata-methods"})
 	if err != nil {

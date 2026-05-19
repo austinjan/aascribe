@@ -241,6 +241,106 @@ func TestBuildReusesSelectedMethodMetadata(t *testing.T) {
 	}
 }
 
+func TestValidateIndexPlanFile(t *testing.T) {
+	root := t.TempDir()
+	planPath := filepath.Join(root, "aascribe.index.toml")
+	mustWriteFile(t, planPath, `
+version = "index-plan-v1"
+
+[methods]
+enabled = ["builtin.classify.v1", "builtin.routing.v1"]
+`)
+
+	validation, err := ValidateIndexPlanFile(planPath)
+	if err != nil {
+		t.Fatalf("expected valid plan, got %v", err)
+	}
+	if validation.Path != planPath || validation.Digest == "" {
+		t.Fatalf("unexpected validation result: %#v", validation)
+	}
+	if len(validation.Plan.Methods.Enabled) != 2 {
+		t.Fatalf("expected enabled methods, got %#v", validation.Plan.Methods.Enabled)
+	}
+}
+
+func TestValidateIndexPlanRejectsInvalidInputs(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "version",
+			body: `version = "nope"
+[methods]
+enabled = ["builtin.classify.v1"]
+`,
+			want: "Unsupported index plan version",
+		},
+		{
+			name: "unknown method",
+			body: `version = "index-plan-v1"
+[methods]
+enabled = ["missing.v1"]
+`,
+			want: "Unknown index method",
+		},
+		{
+			name: "duplicate enabled",
+			body: `version = "index-plan-v1"
+[methods]
+enabled = ["builtin.classify.v1", "builtin.classify.v1"]
+`,
+			want: "Duplicate enabled index method",
+		},
+		{
+			name: "duplicate custom",
+			body: `version = "index-plan-v1"
+[methods]
+enabled = []
+
+[[methods.custom]]
+id = "custom.security.v1"
+stage = "file"
+scope = "file"
+command = ["./security"]
+
+[[methods.custom]]
+id = "custom.security.v1"
+stage = "file"
+scope = "file"
+command = ["./security"]
+`,
+			want: "Duplicate custom index method id",
+		},
+		{
+			name: "enabled custom blocked",
+			body: `version = "index-plan-v1"
+[methods]
+enabled = ["custom.security.v1"]
+
+[[methods.custom]]
+id = "custom.security.v1"
+stage = "file"
+scope = "file"
+command = ["./security"]
+`,
+			want: "Custom index method execution is not available in v2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			planPath := filepath.Join(root, "aascribe.index.toml")
+			mustWriteFile(t, planPath, tt.body)
+			_, err := ValidateIndexPlanFile(planPath)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q error, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
 func TestBuildReadsGitignoreAndAaignoreAsBlacklist(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, ".gitignore"), "ignored.txt\nbuild/\n")

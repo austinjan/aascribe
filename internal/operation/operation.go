@@ -607,6 +607,24 @@ func resultPath(storePath, id string) string {
 	return filepath.Join(operationDir(storePath, id), "result.json")
 }
 
+func SnapshotFile(storePath, id, sourcePath, filename string) (string, error) {
+	if strings.TrimSpace(filename) == "" {
+		return "", apperr.InvalidArguments("operation snapshot filename is required.")
+	}
+	if err := ensureOperationExists(storePath, id); err != nil {
+		return "", err
+	}
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return "", apperr.IOError("Failed to read operation snapshot source: %s.", sourcePath)
+	}
+	target := filepath.Join(operationDir(storePath, id), filename)
+	if err := os.WriteFile(target, content, 0o644); err != nil {
+		return "", apperr.IOError("Failed to write operation snapshot: %s.", target)
+	}
+	return target, nil
+}
+
 func ensureOperationExists(storePath, id string) error {
 	if _, err := os.Stat(statusPath(storePath, id)); err != nil {
 		if os.IsNotExist(err) {

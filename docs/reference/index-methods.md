@@ -4,7 +4,7 @@ Status: Proposed design reference
 
 This document describes the `aascribe index` method model: what index methods are, how file and folder methods differ, how lifecycle hooks work, and what an AI agent needs to know before generating an index plan.
 
-The current implementation supports the built-in `base`, `summary`, `builtin.classify.v1`, and `builtin.routing.v1` methods plus the `aascribe index methods` discovery command. `--index-plan`, lifecycle hooks, LLM-backed classifiers, and custom/external methods remain planned work tracked in [../tasks/index-metadata-model-tasks.md](../tasks/index-metadata-model-tasks.md).
+The current implementation supports the built-in `base`, `summary`, `builtin.classify.v1`, and `builtin.routing.v1` methods, the `aascribe index methods` discovery command, and `index-plan-v1` validation/execution through `--index-plan`. Lifecycle hooks, LLM-backed classifiers, and custom/external method execution remain planned work tracked in [../tasks/index-metadata-model-tasks.md](../tasks/index-metadata-model-tasks.md).
 
 `aascribe --format json index methods` is the source of truth for currently available methods. This document is orientation and design guidance.
 
@@ -400,6 +400,8 @@ aascribe index . --metadata-method base  # accepted no-op; base always runs
 aascribe index . --metadata-method builtin.classify.v1
 aascribe index . --metadata-method builtin.classify.v1 --metadata-method builtin.routing.v1
 aascribe index methods
+aascribe index plan validate ./aascribe.index.toml
+aascribe index . --index-plan ./aascribe.index.toml
 ```
 
 Currently accepted method ids:
@@ -411,7 +413,5 @@ Currently accepted method ids:
 
 Planned behavior adds:
 
-- `--index-plan <file>`
-- `aascribe index plan validate`
 - start and end lifecycle method stages
 - explicit custom/external method definitions

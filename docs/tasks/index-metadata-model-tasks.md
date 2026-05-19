@@ -1,6 +1,6 @@
 # Index Metadata Method Tasks
 
-Status: v1 implemented; v2-v4 planned
+Status: v1-v2 implemented; v3-v4 planned
 
 Task breakdown for extending `aascribe index` so scan-time metadata can grow through pluggable metadata methods without hardcoding every future field into the core index engine.
 
@@ -48,6 +48,8 @@ Out of scope:
 - LLM-backed classifier
 
 ### v2: Index Plan Validation
+
+Implemented.
 
 Scope:
 
