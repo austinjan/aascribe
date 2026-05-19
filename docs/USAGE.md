@@ -358,6 +358,7 @@ Behavior notes:
 - `--no-metadata-methods` keeps only required `base` metadata.
 - `--index-plan` is mutually exclusive with `--metadata-method` and `--no-metadata-methods`.
 - `index plan validate <file>` validates an `index-plan-v1` TOML file without running index.
+- `index plan --help` is written as an AI-agent contract for discovering methods, drafting TOML, validating, revising, and only then running the plan.
 - Async `--index-plan` runs snapshot the submitted plan into the operation directory before starting the worker.
 - `builtin.classify.v1` classifies text/status-eligible direct files using deterministic path, file type, and optional summary signals.
 - `builtin.routing.v1` writes folder-level routing metadata by aggregating child classification output.

@@ -649,6 +649,58 @@ func TestRunIndexHelpMentionsIgnoreFiles(t *testing.T) {
 	}
 }
 
+func TestRunIndexPlanHelpGuidesAgents(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"index", "plan", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	for _, want := range []string{
+		"Agent Workflow",
+		"aascribe --format json index methods",
+		"Plan Verification Workflow For AI Agents",
+		"Do not run aascribe index <path> --index-plan <file> until validation succeeds.",
+		"version = \"index-plan-v1\"",
+		"builtin.classify.v1",
+		"builtin.routing.v1",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected index plan help to contain %q, got %q", want, rendered)
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+}
+
+func TestRunIndexPlanValidateHelpGuidesPlanRevision(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	status := Run([]string{"index", "plan", "validate", "--help"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("expected success status, got %d", status)
+	}
+	rendered := stdout.String()
+	for _, want := range []string{
+		"Validation is mandatory before running an index plan.",
+		"If validation fails, revise the plan and validate again.",
+		"aascribe --format json index methods",
+		"Do not run:",
+		"until validation succeeds.",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected index plan validate help to contain %q, got %q", want, rendered)
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+}
+
 func TestRunIndexCleanHelpMentionsForce(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

@@ -297,45 +297,55 @@ It should not hash volatile child fields such as `generated_at`. Use child metho
 
 For non-trivial indexing behavior, an AI agent should prefer an index plan over many CLI flags.
 
-Planned command:
+Command:
 
 ```bash
 aascribe index . --index-plan ./aascribe.index.toml
 ```
 
-Example plan:
+Before writing a plan, an AI agent should discover the current method list:
+
+```bash
+aascribe --format json index methods
+```
+
+That command is the source of truth for valid method ids. Do not guess method names from examples.
+
+Minimal current plan:
 
 ```toml
 version = "index-plan-v1"
 
-[run]
-name = "agent-repo-understanding"
-description = "Index plan for future agents to navigate and answer questions about this repo."
+[methods]
+enabled = [
+  "builtin.classify.v1",
+  "builtin.routing.v1"
+]
+```
+
+Summary-backed current plan:
+
+```toml
+version = "index-plan-v1"
 
 [methods]
 enabled = [
-  "plan.customer-context.v1",
   "summary",
   "builtin.classify.v1",
-  "builtin.routing.v1",
-  "plan.final-summary.v1"
+  "builtin.routing.v1"
 ]
+```
 
-[methods."plan.customer-context.v1"]
-goal = "future agents can navigate and answer questions about this repo"
+For current v2.1 plans, `[methods].enabled` is the only required section. `base` metadata always runs; including `"base"` is optional and usually unnecessary.
 
-[methods."summary"]
-style = "medium"
+Per-method tables use quoted keys when the method id contains dots:
 
+```toml
 [methods."builtin.classify.v1"]
 low_confidence_threshold = 0.6
-
-[methods."builtin.routing.v1"]
-include_tags = true
-
-[methods."plan.final-summary.v1"]
-include_recommended_commands = true
 ```
+
+The quotes are TOML escaping, not special aascribe syntax. Without quotes, TOML treats dots as nested table separators.
 
 Built-in method stage and scope are registry facts. Plan files should not repeat them for built-in methods. Custom method descriptors still need explicit `stage` and `scope` because they define a new method.
 
@@ -344,10 +354,10 @@ Built-in method stage and scope are registry facts. Plan files should not repeat
 An AI agent should use this flow:
 
 ```text
-list available methods -> read plan guidance -> inspect repo/customer goal -> draft index-plan-v1 TOML -> validate plan -> run index with --index-plan
+ask user goal -> list available methods -> draft index-plan-v1 TOML -> validate plan -> revise until valid -> run index with --index-plan
 ```
 
-Planned helper commands:
+Helper commands:
 
 ```bash
 aascribe --format json index methods
@@ -356,7 +366,13 @@ aascribe index plan validate ./aascribe.index.toml
 
 Defer `index plan template`, `index plan explain`, and `index plan schema` until the plan format stabilizes.
 
-The AI should generate the plan file only. It should not run custom external programs while drafting a plan. External execution happens only during a validated `aascribe index --index-plan <file>` run.
+The AI should always validate the plan before running it. If validation fails, revise the TOML and run validation again. Do not run `aascribe index <path> --index-plan <file>` until validation succeeds.
+
+If validation reports an unknown method, run `aascribe --format json index methods` again and rewrite `[methods].enabled` using only returned ids.
+
+If the user wants no LLM usage, omit `"summary"` from `[methods].enabled`.
+
+The AI should generate the plan file only. It should not run custom external programs while drafting a plan. External execution is future-facing and not available in v2.1.
 
 ## External Methods
 

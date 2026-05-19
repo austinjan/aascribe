@@ -845,6 +845,131 @@ Further Info:
   aascribe --help
   Read docs/USAGE.md and docs/spec/index-spec.md for the stable index contract
 `)
+	case "index plan":
+		return strings.TrimSpace(`
+aascribe index plan - create and validate index-plan-v1 TOML files
+
+Purpose:
+  An index plan tells aascribe which index methods to enable for an index run.
+  AI agents should use plans for non-trivial indexing behavior instead of guessing many CLI flags.
+
+Agent Workflow:
+  1. Ask the user what the index should optimize for:
+     - fast local structure only
+     - agent file routing and classification
+     - summary-backed repo understanding
+  2. Discover available methods:
+     aascribe --format json index methods
+  3. Use only method ids returned by that command. Do not invent method ids.
+  4. Draft an index-plan-v1 TOML file.
+  5. Validate it:
+     aascribe index plan validate ./aascribe.index.toml
+  6. Revise the plan until validation succeeds.
+  7. Run index only after validation succeeds:
+     aascribe index <path> --index-plan ./aascribe.index.toml
+
+Plan Verification Workflow For AI Agents:
+  1. Never assume a plan is valid because it matches an example.
+  2. Always run aascribe index plan validate <plan-file> after writing or editing a plan.
+  3. If validation reports an unknown method, run aascribe --format json index methods and rewrite [methods].enabled using only returned ids.
+  4. If the user wants no LLM usage, omit "summary" from [methods].enabled and validate again.
+  5. If validation rejects a custom/external method, explain that custom/external method execution is not available in this version, remove it from [methods].enabled, and validate again.
+  6. Do not run aascribe index <path> --index-plan <file> until validation succeeds.
+
+Current Plan Format:
+  version = "index-plan-v1"
+
+  [methods]
+  enabled = [
+    "builtin.classify.v1",
+    "builtin.routing.v1"
+  ]
+
+Rules:
+  - [methods].enabled is the only required section.
+  - base metadata always runs; including "base" is optional and usually unnecessary.
+  - "summary" enables LLM-backed file summaries and requires configured LLM credentials.
+  - "builtin.classify.v1" performs deterministic file classification.
+  - "builtin.routing.v1" aggregates folder routing metadata.
+  - Do not enable lifecycle start/end methods until they appear in aascribe --format json index methods.
+  - Custom/external method descriptors are future-facing and are not executable in v2.1.
+
+Examples:
+  Fast routing without LLM:
+    version = "index-plan-v1"
+
+    [methods]
+    enabled = [
+      "builtin.classify.v1",
+      "builtin.routing.v1"
+    ]
+
+  Summary-backed repo understanding:
+    version = "index-plan-v1"
+
+    [methods]
+    enabled = [
+      "summary",
+      "builtin.classify.v1",
+      "builtin.routing.v1"
+    ]
+
+Validation:
+  aascribe index plan validate ./aascribe.index.toml
+
+Run:
+  aascribe index . --index-plan ./aascribe.index.toml
+`)
+	case "index plan validate":
+		return strings.TrimSpace(`
+aascribe index plan validate - check an index-plan-v1 TOML file
+
+Usage:
+  aascribe index plan validate <file>
+
+Checks:
+  - version is index-plan-v1
+  - enabled method ids are known
+  - duplicate enabled ids are rejected
+  - custom ids do not conflict with built-ins
+  - custom descriptors are structurally valid
+  - custom/external method execution is still disabled in v2.1
+
+Agent Notes:
+  Validation is mandatory before running an index plan.
+  If validation fails, revise the plan and validate again.
+  If the error mentions an unknown method, refresh method discovery:
+    aascribe --format json index methods
+  Then rewrite the plan using only available method ids.
+  Do not run:
+    aascribe index <path> --index-plan <file>
+  until validation succeeds.
+
+Examples:
+  aascribe index plan validate ./aascribe.index.toml
+  aascribe --format json index plan validate ./aascribe.index.toml
+`)
+	case "index methods":
+		return strings.TrimSpace(`
+aascribe index methods - list available index methods
+
+Purpose:
+  Show the method ids, stages, enablement flags, purpose, descriptions, and config schema metadata that agents should use when choosing index behavior or drafting an index plan.
+
+Usage:
+  aascribe index methods [--stage file|folder|start|end]
+  aascribe --format json index methods [--stage file|folder|start|end]
+
+Agent Notes:
+  Treat the JSON output as the source of truth for valid method ids.
+  Do not invent method ids when writing [methods].enabled in an index-plan-v1 file.
+  After drafting a plan, validate it with:
+    aascribe index plan validate ./aascribe.index.toml
+
+Examples:
+  aascribe index methods
+  aascribe --format json index methods --stage file
+`)
 	case "index clean":
 		return strings.TrimSpace(`
 aascribe index clean - remove generated index metadata artifacts
@@ -1109,7 +1234,7 @@ func HelpTopicFromArgs(args []string) (string, bool) {
 		return "root", true
 	}
 
-	tokens := make([]string, 0, 2)
+	tokens := make([]string, 0, 3)
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -1120,7 +1245,7 @@ func HelpTopicFromArgs(args []string) (string, bool) {
 		case strings.HasPrefix(arg, "--store="), strings.HasPrefix(arg, "--format="):
 		case strings.HasPrefix(arg, "-"):
 		default:
-			if len(tokens) < 2 {
+			if len(tokens) < 3 {
 				tokens = append(tokens, arg)
 			}
 		}
@@ -1150,6 +1275,18 @@ func classifyHelpTopic(tokens []string) string {
 			return "operation " + tokens[1]
 		}
 		return "operation"
+	}
+	if tokens[0] == "index" {
+		if len(tokens) > 2 && tokens[1] == "plan" && tokens[2] == "validate" {
+			return "index plan validate"
+		}
+		if len(tokens) > 1 && tokens[1] == "plan" {
+			return "index plan"
+		}
+		if len(tokens) > 1 {
+			return "index " + tokens[1]
+		}
+		return "index"
 	}
 	return tokens[0]
 }
