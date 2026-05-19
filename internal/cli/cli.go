@@ -123,8 +123,10 @@ type IndexCommand struct {
 func (c IndexCommand) Name() string { return "index" }
 
 const (
-	MetadataMethodBase    = "base"
-	MetadataMethodSummary = "summary"
+	MetadataMethodBase       = "base"
+	MetadataMethodSummary    = "summary"
+	MetadataMethodClassifyV1 = "builtin.classify.v1"
+	MetadataMethodRoutingV1  = "builtin.routing.v1"
 )
 
 func (c IndexCommand) EffectiveMetadataMethods() []string {
@@ -185,6 +187,12 @@ type IndexEvalCommand struct {
 }
 
 func (c IndexEvalCommand) Name() string { return "index" }
+
+type IndexMethodsCommand struct {
+	Stage string
+}
+
+func (c IndexMethodsCommand) Name() string { return "index" }
 
 type IndexMapCommand struct {
 	Path string
@@ -790,6 +798,7 @@ Purpose:
 
 Usage:
   aascribe index <path> [--depth <n>] [--include <glob>] [--exclude <glob>] [--refresh] [--no-summary] [--metadata-method <method>] [--no-metadata-methods] [--max-file-size <bytes>]
+  aascribe index methods [--stage file|folder|start|end]
   aascribe index dirty <path>
   aascribe index eval <path>
   aascribe index clean <path> [--dry-run] --force
@@ -799,7 +808,8 @@ Behavior:
   Detect text files from file content instead of filename extension.
   Write .aascribe_index_meta.json in each indexed folder with local-only metadata for that folder.
   With no metadata method flags, use the default methods: base metadata plus summary.
-  Supported methods in this build are base and summary. Base metadata always runs.
+  Supported methods in this build are base, summary, builtin.classify.v1, and builtin.routing.v1. Base metadata always runs.
+  Use index methods to list method descriptions in text or JSON form.
   Use --concurrency to bound direct-file processing across the whole index run.
   Use --async to start index as an operation and inspect it later with operation status/events/result.
   Use index dirty to mark existing metadata stale so the next index run rebuilds it.
@@ -811,6 +821,8 @@ Examples:
   aascribe index --depth 2 ./internal
   aascribe index --concurrency 4 ./internal
   aascribe index --async ./internal
+  aascribe index methods
+  aascribe --format json index methods --stage file
   aascribe --store ./project-mem index --exclude vendor .
   aascribe index dirty ./internal
   aascribe index eval ./internal
@@ -1482,6 +1494,9 @@ func parseIndex(args []string) (Command, error) {
 	if len(args) > 0 && args[0] == "eval" {
 		return parseIndexEval(args[1:])
 	}
+	if len(args) > 0 && args[0] == "methods" {
+		return parseIndexMethods(args[1:])
+	}
 	if len(args) > 0 && args[0] == "map" {
 		return parseMap(args[1:])
 	}
@@ -1516,7 +1531,7 @@ func parseIndex(args []string) (Command, error) {
 		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--metadata-method", "--metadata-method cannot be used with --no-metadata-methods.")
 	}
 	for _, method := range metadataMethods {
-		if !oneOf(method, MetadataMethodBase, MetadataMethodSummary) {
+		if !oneOf(method, MetadataMethodBase, MetadataMethodSummary, MetadataMethodClassifyV1, MetadataMethodRoutingV1) {
 			return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--metadata-method", "Unsupported metadata method: %s.", method)
 		}
 	}
@@ -1541,6 +1556,22 @@ func parseOperationRunIndex(args []string) (Command, error) {
 		OperationID: args[0],
 		Index:       indexCmd,
 	}, nil
+}
+
+func parseIndexMethods(args []string) (Command, error) {
+	fs := newFlagSet("index methods")
+	var cmd IndexMethodsCommand
+	fs.StringVar(&cmd.Stage, "stage", "", "")
+	if err := parseFlags(fs, args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 0 {
+		return nil, newParseError(ParseErrorDoesNotAcceptArgs, "index methods", "", "index methods does not accept positional arguments.")
+	}
+	if cmd.Stage != "" && !oneOf(cmd.Stage, "file", "folder", "start", "end") {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "index methods", "--stage", "Invalid value for --stage: %s.", cmd.Stage)
+	}
+	return cmd, nil
 }
 
 func parseIndexMap(args []string) (Command, error) {

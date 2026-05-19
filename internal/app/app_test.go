@@ -12,7 +12,7 @@ import (
 	"github.com/austinjan/aascribe/internal/config"
 	"github.com/austinjan/aascribe/internal/operation"
 	"github.com/austinjan/aascribe/internal/store"
-	"github.com/austinjan/aascribe/pkg/llmoutput"
+	"github.com/austinjan/agentcli-core/largeoutput"
 )
 
 func TestParseInitStoreAndForce(t *testing.T) {
@@ -225,7 +225,7 @@ func TestParseIndexFlagsAfterPath(t *testing.T) {
 }
 
 func TestParseIndexMetadataMethods(t *testing.T) {
-	parsed, err := cli.Parse([]string{"index", "./tests", "--metadata-method", "summary", "--metadata-method", "base"})
+	parsed, err := cli.Parse([]string{"index", "./tests", "--metadata-method", "summary", "--metadata-method", "base", "--metadata-method", "builtin.classify.v1"})
 	if err != nil {
 		t.Fatalf("expected parse success, got %v", err)
 	}
@@ -233,12 +233,26 @@ func TestParseIndexMetadataMethods(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected index command, got %#v", parsed.Command)
 	}
-	if len(cmd.MetadataMethods) != 2 || cmd.MetadataMethods[0] != "summary" || cmd.MetadataMethods[1] != "base" {
+	if len(cmd.MetadataMethods) != 3 || cmd.MetadataMethods[0] != "summary" || cmd.MetadataMethods[1] != "base" || cmd.MetadataMethods[2] != "builtin.classify.v1" {
 		t.Fatalf("unexpected metadata methods: %#v", cmd.MetadataMethods)
 	}
 	effective := cmd.EffectiveMetadataMethods()
-	if len(effective) != 2 || effective[0] != "base" || effective[1] != "summary" {
+	if len(effective) != 3 || effective[0] != "base" || effective[1] != "summary" || effective[2] != "builtin.classify.v1" {
 		t.Fatalf("unexpected effective metadata methods: %#v", effective)
+	}
+}
+
+func TestParseIndexMethods(t *testing.T) {
+	parsed, err := cli.Parse([]string{"index", "methods", "--stage", "file"})
+	if err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	cmd, ok := parsed.Command.(cli.IndexMethodsCommand)
+	if !ok {
+		t.Fatalf("expected index methods command, got %#v", parsed.Command)
+	}
+	if cmd.Stage != "file" {
+		t.Fatalf("unexpected stage: %#v", cmd)
 	}
 }
 
@@ -1673,7 +1687,7 @@ func TestLogsClearTruncatesLogFile(t *testing.T) {
 func TestOutputHeadReadsStoredOutput(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "aascribe-store")
 	assertNoError(t, os.MkdirAll(storePath, 0o755))
-	_, err := llmoutput.Deliver(storePath, "chat", "one\ntwo\nthree\nfour", llmoutput.Config{InlineRuneLimit: 4})
+	_, err := largeoutput.Deliver(storePath, "chat", "one\ntwo\nthree\nfour", largeoutput.DeliverOptions{Config: largeoutput.Config{InlineRuneLimit: 4}})
 	if err != nil {
 		t.Fatalf("expected stored output, got %v", err)
 	}

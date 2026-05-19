@@ -34,6 +34,7 @@ type Options struct {
 	Refresh             bool
 	NoSummary           bool
 	MaxFileSize         int64
+	MetadataMethods     []string
 	Summarizer          SummarizerFunc
 	FailureThreshold    int
 	FailureNoticeWriter io.Writer
@@ -61,6 +62,12 @@ type RunReport struct {
 	NotIndexedReasons     map[string]int `json:"not_indexed_reasons,omitempty"`
 	FailureReasons        map[string]int `json:"failure_reasons,omitempty"`
 	Warnings              []string       `json:"warnings,omitempty"`
+	EnabledMethods        []string       `json:"enabled_methods,omitempty"`
+	MethodStatusCounts    map[string]int `json:"method_status_counts,omitempty"`
+	MethodCategoryCounts  map[string]int `json:"method_category_counts,omitempty"`
+	MethodTagCounts       map[string]int `json:"method_tag_counts,omitempty"`
+	LowConfidenceItems    int            `json:"low_confidence_items,omitempty"`
+	UncategorizedItems    int            `json:"uncategorized_items,omitempty"`
 }
 
 type CleanResult struct {
@@ -136,17 +143,18 @@ type FileDescription struct {
 }
 
 type Metadata struct {
-	Version           string           `json:"version"`
-	FolderPath        string           `json:"folder_path"`
-	LastUpdated       string           `json:"last_updated"`
-	Dirty             bool             `json:"dirty,omitempty"`
-	FolderDescription string           `json:"folder_description,omitempty"`
-	BriefSummary      string           `json:"brief_summary,omitempty"`
-	Stats             MetadataStats    `json:"stats,omitempty"`
-	Files             []MetadataFile   `json:"files,omitempty"`
-	NotIndexedFiles   []NotIndexedFile `json:"not_indexed_files,omitempty"`
-	FailedFiles       []FailedFile     `json:"failed_files,omitempty"`
-	Warnings          []string         `json:"warnings,omitempty"`
+	Version           string                  `json:"version"`
+	FolderPath        string                  `json:"folder_path"`
+	LastUpdated       string                  `json:"last_updated"`
+	Dirty             bool                    `json:"dirty,omitempty"`
+	FolderDescription string                  `json:"folder_description,omitempty"`
+	BriefSummary      string                  `json:"brief_summary,omitempty"`
+	Stats             MetadataStats           `json:"stats,omitempty"`
+	Methods           map[string]MethodOutput `json:"methods,omitempty"`
+	Files             []MetadataFile          `json:"files,omitempty"`
+	NotIndexedFiles   []NotIndexedFile        `json:"not_indexed_files,omitempty"`
+	FailedFiles       []FailedFile            `json:"failed_files,omitempty"`
+	Warnings          []string                `json:"warnings,omitempty"`
 }
 
 type MetadataStats struct {
@@ -158,16 +166,17 @@ type MetadataStats struct {
 }
 
 type MetadataFile struct {
-	Path             string `json:"path"`
-	Size             int64  `json:"size"`
-	ModTime          string `json:"mod_time"`
-	ContentHash      string `json:"content_hash"`
-	FileType         string `json:"file_type"`
-	Summary          string `json:"summary,omitempty"`
-	SummarizedAt     string `json:"summarized_at,omitempty"`
-	Status           string `json:"status"`
-	NotIndexedReason string `json:"not_indexed_reason,omitempty"`
-	Error            string `json:"error,omitempty"`
+	Path             string                  `json:"path"`
+	Size             int64                   `json:"size"`
+	ModTime          string                  `json:"mod_time"`
+	ContentHash      string                  `json:"content_hash"`
+	FileType         string                  `json:"file_type"`
+	Summary          string                  `json:"summary,omitempty"`
+	SummarizedAt     string                  `json:"summarized_at,omitempty"`
+	Status           string                  `json:"status"`
+	NotIndexedReason string                  `json:"not_indexed_reason,omitempty"`
+	Error            string                  `json:"error,omitempty"`
+	Methods          map[string]MethodOutput `json:"methods,omitempty"`
 }
 
 type NotIndexedFile struct {
@@ -213,9 +222,10 @@ type fileBuildResult struct {
 }
 
 type childDirResult struct {
-	path string
-	node IndexedPathNode
-	err  error
+	path     string
+	node     IndexedPathNode
+	metadata *Metadata
+	err      error
 }
 
 func Build(opts Options) (*PathIndexTree, error) {
@@ -250,9 +260,13 @@ func Build(opts Options) (*PathIndexTree, error) {
 		rt.ctx = opts.Context
 	}
 	rt.report = &RunReport{
-		StartedAt:         timestamp,
-		NotIndexedReasons: map[string]int{},
-		FailureReasons:    map[string]int{},
+		StartedAt:            timestamp,
+		NotIndexedReasons:    map[string]int{},
+		FailureReasons:       map[string]int{},
+		EnabledMethods:       selectedMethods(opts),
+		MethodStatusCounts:   map[string]int{},
+		MethodCategoryCounts: map[string]int{},
+		MethodTagCounts:      map[string]int{},
 	}
 	rootName := filepath.Base(root)
 	if rootName == "." || rootName == string(filepath.Separator) || rootName == "" {
@@ -681,6 +695,7 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 	metadata.FolderDescription = summarizeDir(children)
 	metadata.BriefSummary = summarizeDir(children)
 	metadata.Stats = buildMetadataStats(children, metadata)
+	runFolderMethods(metadata, childResults, opts, timestamp, rt)
 	if err := writeMetadata(absPath, metadata); err != nil {
 		return IndexedPathNode{}, err
 	}
@@ -717,7 +732,7 @@ func entryIsDir(absPath string, entry os.DirEntry) (bool, error) {
 
 func buildFile(absPath, displayPath string, opts Options, timestamp string, metadata *Metadata, priorMetadata *Metadata, rt *buildRuntime) (IndexedPathNode, error) {
 	rt.noteDiscoveredFile()
-	if reused, ok, err := reuseFileFromMetadata(absPath, displayPath, opts, metadata, priorMetadata); err != nil {
+	if reused, ok, err := reuseFileFromMetadata(absPath, displayPath, opts, metadata, priorMetadata, rt); err != nil {
 		return IndexedPathNode{}, err
 	} else if ok {
 		rt.noteReusedFile()
@@ -742,21 +757,24 @@ func buildFile(absPath, displayPath string, opts Options, timestamp string, meta
 	if opts.NoSummary {
 		analysis.summary = ""
 		analysis.generatedAt = ""
+		methods := runFileMethods(analysis, "not_indexed", opts, timestamp, rt)
 		recordNotIndexed(metadata, displayPath, "no_summary_mode")
-		recordMetadataFile(metadata, analysis, "not_indexed", "no_summary_mode", "")
+		recordMetadataFile(metadata, analysis, "not_indexed", "no_summary_mode", "", methods)
 		rt.noteNotIndexed("no_summary_mode")
 		return node, nil
 	}
 
 	if analysis.notIndexed != "" {
+		methods := runFileMethods(analysis, "not_indexed", opts, timestamp, rt)
 		recordNotIndexed(metadata, displayPath, analysis.notIndexed)
-		recordMetadataFile(metadata, analysis, "not_indexed", analysis.notIndexed, "")
+		recordMetadataFile(metadata, analysis, "not_indexed", analysis.notIndexed, "", methods)
 		rt.noteNotIndexed(analysis.notIndexed)
 		return node, nil
 	}
 	node.Summary = analysis.summary
 	node.SummarizedAt = analysis.generatedAt
-	recordMetadataFile(metadata, analysis, "ok", "", "")
+	methods := runFileMethods(analysis, "ok", opts, timestamp, rt)
+	recordMetadataFile(metadata, analysis, "ok", "", "", methods)
 	rt.noteSummarizedFile()
 	return node, nil
 }
@@ -1212,7 +1230,7 @@ func recordFailure(metadata *Metadata, displayPath, errMsg string) {
 	})
 }
 
-func recordMetadataFile(metadata *Metadata, analysis *fileAnalysis, status, notIndexedReason, errMsg string) {
+func recordMetadataFile(metadata *Metadata, analysis *fileAnalysis, status, notIndexedReason, errMsg string, methods map[string]MethodOutput) {
 	if metadata == nil || analysis == nil {
 		return
 	}
@@ -1227,6 +1245,7 @@ func recordMetadataFile(metadata *Metadata, analysis *fileAnalysis, status, notI
 		Status:           status,
 		NotIndexedReason: notIndexedReason,
 		Error:            errMsg,
+		Methods:          methods,
 	})
 }
 
@@ -1239,6 +1258,114 @@ func recordMetadataFailure(metadata *Metadata, displayPath, errMsg string) {
 		Status: "failed",
 		Error:  errMsg,
 	})
+}
+
+func runFileMethods(analysis *fileAnalysis, status string, opts Options, timestamp string, rt *buildRuntime) map[string]MethodOutput {
+	if analysis == nil {
+		return nil
+	}
+	selected := selectedMethodSet(opts)
+	reg := defaultMethodRegistry()
+	outputs := map[string]MethodOutput{}
+	input := FileMethodInput{
+		Path:        analysis.path,
+		FileName:    filepath.Base(analysis.path),
+		FileType:    analysis.fileType,
+		ContentHash: analysis.hash,
+		Summary:     analysis.summary,
+		NoSummary:   opts.NoSummary,
+		Status:      status,
+	}
+	for id, method := range reg.fileMethods {
+		if !selected[id] {
+			continue
+		}
+		descriptor := method.Describe()
+		output := MethodOutput{
+			Stage:       descriptor.Stage,
+			GeneratedAt: timestamp,
+			InputHash:   stableInputHash(input, method),
+		}
+		if analysis.notIndexed != "" {
+			output.Status = MethodStatusSkipped
+			output.Fields = MethodFields{"reason": analysis.notIndexed}
+			outputs[id] = output
+			if rt != nil {
+				rt.noteMethodOutput(id, output)
+			}
+			continue
+		}
+		if descriptor.RequiresSummary && opts.NoSummary {
+			output.Status = MethodStatusSkipped
+			output.Fields = MethodFields{"reason": "summary_unavailable"}
+			outputs[id] = output
+			if rt != nil {
+				rt.noteMethodOutput(id, output)
+			}
+			continue
+		}
+		fields, err := method.BuildFile(rt.ctx, input)
+		if err != nil {
+			output.Status = MethodStatusFailed
+			output.Error = err.Error()
+		} else {
+			output.Status = MethodStatusOK
+			output.Fields = fields
+		}
+		outputs[id] = output
+		if rt != nil {
+			rt.noteMethodOutput(id, output)
+		}
+	}
+	if len(outputs) == 0 {
+		return nil
+	}
+	return outputs
+}
+
+func runFolderMethods(metadata *Metadata, childResults []childDirResult, opts Options, timestamp string, rt *buildRuntime) {
+	if metadata == nil {
+		return
+	}
+	selected := selectedMethodSet(opts)
+	reg := defaultMethodRegistry()
+	children := make([]Metadata, 0, len(childResults))
+	for _, result := range childResults {
+		if result.err == nil && result.metadata != nil {
+			children = append(children, *result.metadata)
+		}
+	}
+	input := FolderMethodInput{
+		Path:     metadata.FolderPath,
+		Files:    metadata.Files,
+		Children: children,
+	}
+	for id, method := range reg.folderMethods {
+		if !selected[id] {
+			continue
+		}
+		descriptor := method.Describe()
+		output := MethodOutput{
+			Stage:       descriptor.Stage,
+			GeneratedAt: timestamp,
+			InputHash:   stableInputHash(input, method),
+		}
+		fields, err := method.BuildFolder(rt.ctx, input)
+		if err != nil {
+			output.Status = MethodStatusFailed
+			output.Error = err.Error()
+		} else {
+			output.Status = MethodStatusOK
+			output.Fields = fields
+		}
+		if metadata.Methods == nil {
+			metadata.Methods = map[string]MethodOutput{}
+		}
+		metadata.Methods[id] = output
+		if rt != nil {
+			rt.noteMethodOutput(id, output)
+		}
+	}
 }
 
 func buildMetadataStats(children []IndexedPathNode, metadata *Metadata) MetadataStats {
@@ -1280,8 +1407,8 @@ func readMetadata(root string) (*Metadata, error) {
 	return &meta, nil
 }
 
-func reuseFileFromMetadata(absPath, displayPath string, opts Options, metadata *Metadata, priorMetadata *Metadata) (IndexedPathNode, bool, error) {
-	if opts.Refresh || opts.NoSummary || priorMetadata == nil || priorMetadata.Dirty {
+func reuseFileFromMetadata(absPath, displayPath string, opts Options, metadata *Metadata, priorMetadata *Metadata, rt *buildRuntime) (IndexedPathNode, bool, error) {
+	if opts.Refresh || priorMetadata == nil || priorMetadata.Dirty {
 		return IndexedPathNode{}, false, nil
 	}
 
@@ -1290,6 +1417,9 @@ func reuseFileFromMetadata(absPath, displayPath string, opts Options, metadata *
 		return IndexedPathNode{}, false, nil
 	}
 	if prior.Status == "failed" {
+		return IndexedPathNode{}, false, nil
+	}
+	if opts.NoSummary && (prior.Status != "not_indexed" || prior.NotIndexedReason != "no_summary_mode") {
 		return IndexedPathNode{}, false, nil
 	}
 	if !opts.NoSummary && prior.Status == "not_indexed" && prior.NotIndexedReason == "no_summary_mode" {
@@ -1321,15 +1451,55 @@ func reuseFileFromMetadata(absPath, displayPath string, opts Options, metadata *
 		Size: prior.Size,
 		Hash: prior.ContentHash,
 	}
+	if !reusableMethodOutputs(prior, opts) {
+		return IndexedPathNode{}, false, nil
+	}
 	if prior.Status == "ok" {
 		node.Summary = prior.Summary
 		node.SummarizedAt = prior.SummarizedAt
+	}
+	if rt != nil {
+		for id, output := range prior.Methods {
+			if selectedMethodSet(opts)[id] {
+				rt.noteMethodOutput(id, output)
+			}
+		}
 	}
 	metadata.Files = append(metadata.Files, *prior)
 	if prior.Status == "not_indexed" {
 		recordNotIndexed(metadata, displayPath, prior.NotIndexedReason)
 	}
 	return node, true, nil
+}
+
+func reusableMethodOutputs(prior *MetadataFile, opts Options) bool {
+	if prior == nil {
+		return false
+	}
+	reg := defaultMethodRegistry()
+	input := FileMethodInput{
+		Path:        prior.Path,
+		FileName:    filepath.Base(prior.Path),
+		FileType:    prior.FileType,
+		ContentHash: prior.ContentHash,
+		Summary:     prior.Summary,
+		NoSummary:   opts.NoSummary,
+		Status:      prior.Status,
+	}
+	selected := selectedMethodSet(opts)
+	for id, method := range reg.fileMethods {
+		if !selected[id] {
+			continue
+		}
+		output, ok := prior.Methods[id]
+		if !ok {
+			return false
+		}
+		if output.InputHash != stableInputHash(input, method) {
+			return false
+		}
+	}
+	return true
 }
 
 func findMetadataFile(metadata *Metadata, displayPath string) *MetadataFile {
@@ -1552,6 +1722,36 @@ func (rt *buildRuntime) noteWarnings(warnings []string) {
 	rt.reportMu.Unlock()
 }
 
+func (rt *buildRuntime) noteMethodOutput(id string, output MethodOutput) {
+	if rt == nil || rt.report == nil || id == "" {
+		return
+	}
+	rt.reportMu.Lock()
+	statusKey := id + ":" + string(output.Status)
+	rt.report.MethodStatusCounts[statusKey]++
+	if output.Status == MethodStatusOK {
+		if category, ok := output.Fields["category"].(string); ok && category != "" {
+			rt.report.MethodCategoryCounts[category]++
+			if category == "unknown" {
+				rt.report.UncategorizedItems++
+			}
+		}
+		for _, tag := range stringSliceField(output.Fields["tags"]) {
+			rt.report.MethodTagCounts[tag]++
+		}
+		if confidence, ok := numericField(output.Fields["confidence"]); ok && confidence < 0.6 {
+			rt.report.LowConfidenceItems++
+		}
+		if count, ok := intField(output.Fields["low_confidence_count"]); ok {
+			rt.report.LowConfidenceItems += count
+		}
+		if count, ok := intField(output.Fields["uncategorized_count"]); ok {
+			rt.report.UncategorizedItems += count
+		}
+	}
+	rt.reportMu.Unlock()
+}
+
 func runWithFolderLimiter(rt *buildRuntime, fn func() error) error {
 	if rt == nil || rt.folderLimiter == nil {
 		return fn()
@@ -1603,10 +1803,15 @@ func processChildDirs(absPath, displayPath string, depth int, entries []os.DirEn
 			childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
 			childAbs := filepath.Join(absPath, name)
 			node, err := buildDir(childAbs, childDisplay, depth+1, opts, matcher, timestamp, tracker, rt, false)
+			var childMetadata *Metadata
+			if err == nil {
+				childMetadata, _ = readMetadata(childAbs)
+			}
 			results[i] = childDirResult{
-				path: childDisplay,
-				node: node,
-				err:  err,
+				path:     childDisplay,
+				node:     node,
+				metadata: childMetadata,
+				err:      err,
 			}
 		}
 		sort.Slice(results, func(i, j int) bool {
@@ -1642,10 +1847,15 @@ func processChildDirs(absPath, displayPath string, depth int, entries []os.DirEn
 				childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
 				childAbs := filepath.Join(absPath, name)
 				node, err := buildDir(childAbs, childDisplay, depth+1, opts, matcher, timestamp, tracker, rt, false)
+				var childMetadata *Metadata
+				if err == nil {
+					childMetadata, _ = readMetadata(childAbs)
+				}
 				results[job.index] = childDirResult{
-					path: childDisplay,
-					node: node,
-					err:  err,
+					path:     childDisplay,
+					node:     node,
+					metadata: childMetadata,
+					err:      err,
 				}
 			}
 		}()

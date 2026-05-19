@@ -22,7 +22,7 @@ import (
 	"github.com/austinjan/aascribe/internal/output"
 	"github.com/austinjan/aascribe/internal/search"
 	"github.com/austinjan/aascribe/internal/store"
-	"github.com/austinjan/aascribe/pkg/llmoutput"
+	"github.com/austinjan/agentcli-core/largeoutput"
 )
 
 var promptRunner = runPrompt
@@ -124,6 +124,8 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 		return runIndexDirty(cmd)
 	case cli.IndexEvalCommand:
 		return runIndexEval(cmd)
+	case cli.IndexMethodsCommand:
+		return runIndexMethods(cmd)
 	case cli.IndexMapCommand:
 		return runIndexMap(cmd)
 	case cli.MapCommand:
@@ -178,6 +180,7 @@ func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, er
 		Refresh:             cmd.Refresh,
 		NoSummary:           noSummary,
 		MaxFileSize:         cmd.MaxFileSize,
+		MetadataMethods:     cmd.EffectiveMetadataMethods(),
 		Summarizer:          summarizer,
 		FailureNoticeWriter: os.Stderr,
 	})
@@ -193,6 +196,36 @@ func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, er
 	return &output.CommandResult{
 		Data: result,
 		Text: renderIndexText(result) + "\nreport: " + reportPath,
+	}, nil
+}
+
+func runIndexMethods(cmd cli.IndexMethodsCommand) (*output.CommandResult, error) {
+	descriptors, err := index.ListMethodDescriptors(cmd.Stage)
+	if err != nil {
+		return nil, err
+	}
+	lines := []string{"available index methods:"}
+	if len(descriptors) == 0 {
+		lines = append(lines, "- none")
+	}
+	for _, descriptor := range descriptors {
+		lines = append(lines,
+			"- "+descriptor.ID,
+			"  stage: "+string(descriptor.Stage),
+			fmt.Sprintf("  required: %t", descriptor.Required),
+			fmt.Sprintf("  default_enabled: %t", descriptor.DefaultEnabled),
+			fmt.Sprintf("  always_enabled: %t", descriptor.AlwaysEnabled),
+			fmt.Sprintf("  requires_summary: %t", descriptor.RequiresSummary),
+			fmt.Sprintf("  supports_no_summary: %t", descriptor.SupportsNoSummary),
+			"  purpose: "+descriptor.Purpose,
+			"  description: "+descriptor.Description,
+		)
+	}
+	return &output.CommandResult{
+		Data: map[string]any{
+			"methods": descriptors,
+		},
+		Text: strings.Join(lines, "\n"),
 	}, nil
 }
 
@@ -334,6 +367,7 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 			Refresh:             cmd.Refresh,
 			NoSummary:           noSummary,
 			MaxFileSize:         cmd.MaxFileSize,
+			MetadataMethods:     cmd.EffectiveMetadataMethods(),
 			Summarizer:          summarizer,
 			FailureNoticeWriter: io.Discard,
 		})
@@ -1091,7 +1125,7 @@ func runSummarize(storePath, sourcePath string) (*output.CommandResult, error) {
 }
 
 func runOutputList(storePath string) (*output.CommandResult, error) {
-	items, err := llmoutput.List(storePath)
+	items, err := largeoutput.List(storePath)
 	if err != nil {
 		return nil, err
 	}
@@ -1241,6 +1275,22 @@ func renderIndexCompletionReport(cmd cli.IndexCommand, result *index.PathIndexTr
 		fmt.Sprintf("- max_file_size: %d", cmd.MaxFileSize),
 		fmt.Sprintf("- concurrency: %d", cmd.Concurrency),
 		"",
+		"## Metadata Methods",
+		"",
+		"- enabled_methods: "+stringListText(run.EnabledMethods),
+		fmt.Sprintf("- low_confidence_items: %d", run.LowConfidenceItems),
+		fmt.Sprintf("- uncategorized_items: %d", run.UncategorizedItems),
+		"",
+		"### Method Status Counts",
+		"",
+	)
+	lines = appendCountMap(lines, run.MethodStatusCounts)
+	lines = append(lines, "", "### Method Category Counts", "")
+	lines = appendCountMap(lines, run.MethodCategoryCounts)
+	lines = append(lines, "", "### Method Tag Counts", "")
+	lines = appendCountMap(lines, run.MethodTagCounts)
+	lines = append(lines,
+		"",
 		"## Not Indexed Reasons",
 		"",
 	)
@@ -1319,9 +1369,9 @@ func renderIndexText(result *index.PathIndexTree) string {
 }
 
 func runOutputMeta(storePath, id string) (*output.CommandResult, error) {
-	item, err := llmoutput.Meta(storePath, id)
+	item, err := largeoutput.Meta(storePath, id)
 	if err != nil {
-		return nil, err
+		return nil, output.MapLargeOutputErr(err, id)
 	}
 	return &output.CommandResult{
 		Data: map[string]any{
@@ -1341,38 +1391,39 @@ func runOutputMeta(storePath, id string) (*output.CommandResult, error) {
 }
 
 func runOutputShow(storePath, id string) (*output.CommandResult, error) {
-	chunk, err := llmoutput.Show(storePath, id, llmoutput.DefaultConfig())
+	chunk, err := largeoutput.Show(storePath, id, largeoutput.DefaultConfig())
 	if err != nil {
-		return nil, err
+		return nil, output.MapLargeOutputErr(err, id)
 	}
 	return outputChunkResult(chunk), nil
 }
 
 func runOutputHead(storePath, id string, lines int) (*output.CommandResult, error) {
-	chunk, err := llmoutput.Head(storePath, id, lines, llmoutput.DefaultConfig())
+	chunk, err := largeoutput.Head(storePath, id, lines, largeoutput.DefaultConfig())
 	if err != nil {
-		return nil, err
+		return nil, output.MapLargeOutputErr(err, id)
 	}
 	return outputChunkResult(chunk), nil
 }
 
 func runOutputTail(storePath, id string, lines int) (*output.CommandResult, error) {
-	chunk, err := llmoutput.Tail(storePath, id, lines, llmoutput.DefaultConfig())
+	chunk, err := largeoutput.Tail(storePath, id, lines, largeoutput.DefaultConfig())
 	if err != nil {
-		return nil, err
+		return nil, output.MapLargeOutputErr(err, id)
 	}
 	return outputChunkResult(chunk), nil
 }
 
 func runOutputSlice(storePath, id string, offset, limit int) (*output.CommandResult, error) {
-	chunk, err := llmoutput.Slice(storePath, id, offset, limit, llmoutput.DefaultConfig())
+	chunk, err := largeoutput.Slice(storePath, id, offset, limit, largeoutput.DefaultConfig())
 	if err != nil {
-		return nil, err
+		return nil, output.MapLargeOutputErr(err, id)
 	}
 	return outputChunkResult(chunk), nil
 }
 
-func outputChunkResult(chunk *llmoutput.Chunk) *output.CommandResult {
+func outputChunkResult(chunk *largeoutput.Chunk) *output.CommandResult {
+	cfg := largeoutput.DefaultConfig()
 	return &output.CommandResult{
 		Data: map[string]any{
 			"output_id":          chunk.OutputID,
@@ -1381,7 +1432,7 @@ func outputChunkResult(chunk *llmoutput.Chunk) *output.CommandResult {
 			"range_end":          chunk.RangeEnd,
 			"total_bytes":        chunk.TotalBytes,
 			"total_runes":        chunk.TotalRunes,
-			"available_commands": chunk.Commands,
+			"available_commands": output.AvailableOutputCommands(chunk.OutputID, cfg),
 		},
 		Text: chunk.Text,
 	}

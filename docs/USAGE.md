@@ -328,6 +328,7 @@ Walk a directory, summarize direct files per folder, and persist local metadata.
 
 ```
 aascribe index <path> [flags]
+aascribe index methods [--stage file|folder|start|end]
 aascribe index dirty <path>
 aascribe index eval <path>
 ```
@@ -342,7 +343,7 @@ aascribe index eval <path>
 | `--async` | off | Start indexing as a persisted operation and return an `operation_id` immediately |
 | `--refresh` | off | Ignore cache; regenerate summaries |
 | `--no-summary` | off | Return structure only. Much faster |
-| `--metadata-method <method>` | default set | Select explicit metadata methods. Repeatable. Current methods: `base`, `summary` |
+| `--metadata-method <method>` | default set | Select explicit metadata methods. Repeatable. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.routing.v1` |
 | `--no-metadata-methods` | off | Disable optional/default methods beyond required base metadata |
 | `--max-file-size <bytes>` | `1048576` | Files over this size get metadata only, no summary |
 
@@ -354,6 +355,9 @@ Behavior notes:
 - With no metadata method flags, `index` uses the default method set: required `base` metadata plus `summary`.
 - If `--metadata-method` flags are provided, `index` uses those methods plus required `base`.
 - `--no-metadata-methods` keeps only required `base` metadata.
+- `builtin.classify.v1` classifies text/status-eligible direct files using deterministic path, file type, and optional summary signals.
+- `builtin.routing.v1` writes folder-level routing metadata by aggregating child classification output.
+- `index methods` lists available methods with descriptions; use `--format json` for machine-readable descriptors.
 - `summary` is LLM-backed. If LLM config or the configured API-key environment variable is missing, summary-enabled indexing returns an error instead of using a local fallback summary.
 - Successful sync and async `index` jobs also write a Markdown completion report under `data/report/` when using the default `data/memory` store.
 - Each `.aascribe_index_meta.json` is local-only: it describes the current folder and its direct files, not a full descendant tree.
@@ -372,6 +376,9 @@ aascribe index --concurrency 8 ./src
 aascribe index --async ./src
 aascribe index --no-summary .           # structure-only, fast
 aascribe index --metadata-method summary .
+aascribe index --metadata-method builtin.classify.v1 --metadata-method builtin.routing.v1 .
+aascribe index methods
+aascribe --format json index methods --stage file
 aascribe index --refresh .              # force re-summarize
 aascribe index dirty ./src              # mark existing metadata stale
 aascribe index eval ./src               # preview changed vs unchanged work

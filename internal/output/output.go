@@ -2,6 +2,7 @@ package output
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -9,7 +10,7 @@ import (
 
 	"github.com/austinjan/aascribe/internal/apperr"
 	"github.com/austinjan/aascribe/internal/cli"
-	"github.com/austinjan/aascribe/pkg/llmoutput"
+	"github.com/austinjan/agentcli-core/largeoutput"
 )
 
 type CommandResult struct {
@@ -59,12 +60,13 @@ func WriteSuccess(w io.Writer, format cli.Format, quiet bool, result *CommandRes
 	payloadData := result.Data
 	textOut := result.Text
 	if result.PrimaryTextKey != "" && meta.Store != "" {
-		delivered, err := llmoutput.Deliver(meta.Store, meta.Command, result.Text, llmoutput.DefaultConfig())
+		cfg := largeoutput.DefaultConfig()
+		delivered, err := largeoutput.Deliver(meta.Store, meta.Command, result.Text, largeoutput.DeliverOptions{Config: cfg})
 		if err != nil {
 			return err
 		}
-		textOut = renderDeliveredText(delivered)
-		payloadData = decorateData(result.Data, result.PrimaryTextKey, delivered)
+		textOut = renderDeliveredText(delivered, cfg)
+		payloadData = decorateData(result.Data, result.PrimaryTextKey, delivered, cfg)
 	}
 
 	switch format {
@@ -789,15 +791,16 @@ func parseErrorGuidance(err *cli.ParseError) (string, []string) {
 	}
 }
 
-func decorateData(data any, primaryTextKey string, delivered *llmoutput.DeliveredOutput) any {
-	if !delivered.Hint.Truncated {
+func decorateData(data any, primaryTextKey string, delivered *largeoutput.DeliveredOutput, cfg largeoutput.Config) any {
+	if !delivered.Continuation.Truncated {
 		return data
 	}
+	transport := buildTransportEnvelope(delivered.Continuation, cfg)
 	payload, ok := data.(map[string]any)
 	if !ok {
 		return map[string]any{
 			"value":     data,
-			"transport": delivered.Hint,
+			"transport": transport,
 		}
 	}
 	cloned := make(map[string]any, len(payload)+1)
@@ -805,20 +808,81 @@ func decorateData(data any, primaryTextKey string, delivered *llmoutput.Delivere
 		cloned[key] = value
 	}
 	cloned[primaryTextKey] = delivered.InlineText
-	cloned["transport"] = delivered.Hint
+	cloned["transport"] = transport
 	return cloned
 }
 
-func renderDeliveredText(delivered *llmoutput.DeliveredOutput) string {
-	if !delivered.Hint.Truncated {
+func renderDeliveredText(delivered *largeoutput.DeliveredOutput, cfg largeoutput.Config) string {
+	if !delivered.Continuation.Truncated {
 		return delivered.InlineText
 	}
+	c := delivered.Continuation
 	return strings.TrimSpace(fmt.Sprintf(`%s
 
 [partial output]
 output_id: %s
 range: %d..%d of %d runes
-next: %s`, delivered.InlineText, delivered.Hint.OutputID, delivered.Hint.InlineRangeStart, delivered.Hint.InlineRangeEnd, delivered.Hint.TotalRunes, delivered.Hint.NextSuggestion))
+next: %s`, delivered.InlineText, c.OutputID, c.InlineRangeStart, c.InlineRangeEnd, c.TotalRunes, NextOutputSliceCommand(c.OutputID, c.NextOffset, cfg)))
+}
+
+// buildTransportEnvelope produces the aascribe-specific JSON shape consumers
+// expect under data.transport, composing the next_suggestion and
+// available_commands strings from the structured Continuation fields.
+func buildTransportEnvelope(c largeoutput.Continuation, cfg largeoutput.Config) map[string]any {
+	out := map[string]any{
+		"stored":             c.Stored,
+		"truncated":          c.Truncated,
+		"inline_range_start": c.InlineRangeStart,
+		"inline_range_end":   c.InlineRangeEnd,
+		"total_bytes":        c.TotalBytes,
+		"total_runes":        c.TotalRunes,
+	}
+	if c.OutputID != "" {
+		out["output_id"] = c.OutputID
+		out["next_suggestion"] = NextOutputSliceCommand(c.OutputID, c.NextOffset, cfg)
+		out["available_commands"] = AvailableOutputCommands(c.OutputID, cfg)
+	}
+	if c.TruncationMsg != "" {
+		out["truncation_msg"] = c.TruncationMsg
+	}
+	if len(c.Hints) > 0 {
+		out["hints"] = c.Hints
+	}
+	return out
+}
+
+// NextOutputSliceCommand returns the aascribe-shaped command string the agent
+// should run to fetch the next chunk of a stored output.
+func NextOutputSliceCommand(id string, nextOffset int, cfg largeoutput.Config) string {
+	return fmt.Sprintf("aascribe output slice %s --offset %d --limit %d", id, nextOffset, cfg.DefaultSliceRunes)
+}
+
+// MapLargeOutputErr translates a largeoutput sentinel error into the matching
+// aascribe apperr.Error so the JSON envelope and exit code stay backward
+// compatible. Pass the id the caller looked up (or "" if not applicable).
+func MapLargeOutputErr(err error, id string) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, largeoutput.ErrNotFound) {
+		return apperr.NotFoundOutput(id)
+	}
+	if errors.Is(err, largeoutput.ErrInvalidOffset) {
+		return apperr.InvalidArguments("%s", err.Error())
+	}
+	return err
+}
+
+// AvailableOutputCommands lists the aascribe commands an agent can use to
+// inspect a stored output.
+func AvailableOutputCommands(id string, cfg largeoutput.Config) []string {
+	return []string{
+		fmt.Sprintf("aascribe output show %s", id),
+		fmt.Sprintf("aascribe output head %s --lines %d", id, cfg.DefaultHeadLines),
+		fmt.Sprintf("aascribe output tail %s --lines %d", id, cfg.DefaultTailLines),
+		fmt.Sprintf("aascribe output slice %s --offset %d --limit %d", id, cfg.DefaultSliceRunes, cfg.DefaultSliceRunes),
+		fmt.Sprintf("aascribe output meta %s", id),
+	}
 }
 
 func prefixExamples(values []string, prefix string) []string {

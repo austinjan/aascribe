@@ -125,6 +125,122 @@ func TestBuildNoSummaryOmitsSummaryFields(t *testing.T) {
 	}
 }
 
+func TestBuildWritesClassifyAndRoutingMethods(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "main.go"), "package main\n")
+	mustWriteFile(t, filepath.Join(root, "README.md"), "# Demo\n")
+
+	result, err := Build(Options{
+		Root:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1, MethodRoutingV1},
+	})
+	if err != nil {
+		t.Fatalf("expected build success, got %v", err)
+	}
+	if result.Run == nil || result.Run.MethodStatusCounts[MethodClassifyV1+":ok"] != 2 || result.Run.MethodStatusCounts[MethodRoutingV1+":ok"] != 1 {
+		t.Fatalf("expected method report counts, got %#v", result.Run)
+	}
+
+	meta := readMetadataFile(t, root)
+	if len(meta.Files) != 2 {
+		t.Fatalf("expected two metadata files, got %#v", meta.Files)
+	}
+	categories := map[string]bool{}
+	for _, file := range meta.Files {
+		output, ok := file.Methods[MethodClassifyV1]
+		if !ok {
+			t.Fatalf("expected classify method on file metadata, got %#v", file)
+		}
+		if output.Stage != MethodStageFile || output.Status != MethodStatusOK || output.InputHash == "" {
+			t.Fatalf("unexpected classify output: %#v", output)
+		}
+		category, _ := output.Fields["category"].(string)
+		categories[category] = true
+	}
+	if !categories["source"] || !categories["docs"] {
+		t.Fatalf("expected source and docs categories, got %#v", categories)
+	}
+	routing, ok := meta.Methods[MethodRoutingV1]
+	if !ok {
+		t.Fatalf("expected routing method on folder metadata, got %#v", meta.Methods)
+	}
+	if routing.Stage != MethodStageFolder || routing.Status != MethodStatusOK || routing.InputHash == "" {
+		t.Fatalf("unexpected routing output: %#v", routing)
+	}
+	counts := intMapField(routing.Fields["category_counts"])
+	if counts["source"] != 1 || counts["docs"] != 1 {
+		t.Fatalf("expected routing category counts, got %#v", routing.Fields)
+	}
+}
+
+func TestBuildSelectedMethodPreventsOldMetadataReuse(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "main.go"), "package main\n")
+
+	_, err := Build(Options{
+		Root:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase},
+	})
+	if err != nil {
+		t.Fatalf("expected first build success, got %v", err)
+	}
+	meta := readMetadataFile(t, root)
+	if len(meta.Files) != 1 || meta.Files[0].Methods != nil {
+		t.Fatalf("expected base-only metadata without method envelope, got %#v", meta.Files)
+	}
+
+	_, err = Build(Options{
+		Root:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1},
+	})
+	if err != nil {
+		t.Fatalf("expected second build success, got %v", err)
+	}
+	meta = readMetadataFile(t, root)
+	if _, ok := meta.Files[0].Methods[MethodClassifyV1]; !ok {
+		t.Fatalf("expected classify method after selected-method rebuild, got %#v", meta.Files[0])
+	}
+}
+
+func TestBuildReusesSelectedMethodMetadata(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "main.go"), "package main\n")
+
+	_, err := Build(Options{
+		Root:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1},
+	})
+	if err != nil {
+		t.Fatalf("expected first build success, got %v", err)
+	}
+
+	result, err := Build(Options{
+		Root:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1},
+	})
+	if err != nil {
+		t.Fatalf("expected second build success, got %v", err)
+	}
+	if result.Run == nil || result.Run.UnchangedSkippedFiles != 1 || result.Run.MethodStatusCounts[MethodClassifyV1+":ok"] != 1 {
+		t.Fatalf("expected selected method metadata reuse, got %#v", result.Run)
+	}
+}
+
 func TestBuildReadsGitignoreAndAaignoreAsBlacklist(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, ".gitignore"), "ignored.txt\nbuild/\n")

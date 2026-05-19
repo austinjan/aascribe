@@ -1,55 +1,114 @@
 # Index Metadata Method Tasks
 
-Status: Draft
+Status: v1 implemented; v2-v4 planned
 
 Task breakdown for extending `aascribe index` so scan-time metadata can grow through pluggable metadata methods without hardcoding every future field into the core index engine.
+
+The durable reference for method concepts is [../reference/index-methods.md](../reference/index-methods.md).
 
 ## Goal
 
 `index` should remain the main command for understanding repository content.
 
-During scanning, `index` should be able to run one or more metadata methods that add, omit, or refresh optional metadata fields such as category, tags, sensitivity, ownership, routing hints, or stale/active state.
+During scanning, `index` should be able to run metadata methods that add, omit, or refresh optional metadata fields such as category, tags, sensitivity, ownership, routing hints, or stale/active state.
 
-The design target is:
+The long-term design target is:
 
 ```text
-scan file -> run default metadata methods -> run optional metadata methods -> persist local metadata -> report aggregate results
+run optional start hooks -> scan files -> run file methods -> run folder methods -> persist local metadata -> run optional end hooks -> report aggregate results
 ```
 
-## Design Principle
+The implementation must be tiered. The first milestone should stabilize the in-process method envelope, registry, discovery output, and report shape before adding index plans, lifecycle hooks, LLM classification, or external subprocess methods.
 
-Keep two layers separate:
+## Tiers
 
-- default methods: the current `index` behavior that is required for cache correctness and useful baseline summaries
-- optional methods: extra agent-facing interpretation produced by rules or LLM calls
+### v1: In-Process Method Envelope
 
-Default methods must preserve today's default `index` behavior:
+Implemented.
 
-- path
-- size
-- high-precision mod time
-- content hash
-- file type
-- status
-- summary
-- summarized timestamp
-- not-indexed reason
-- error
+Scope:
 
-Optional method metadata can vary by method and use case:
+- additive `methods` envelope in `.aascribe_index_meta.json`
+- split method interfaces and registry
+- deterministic built-in classifier, no LLM
+- deterministic built-in folder routing method that rolls up classifier fields
+- `--metadata-method <registered-id>` enables registered optional methods such as `builtin.classify.v1`
+- `aascribe index methods` discovery command with text and JSON output
+- method status enum
+- binary/text eligibility rules
+- built-in report aggregation for known typed fields
+- metadata compatibility tests for old files without method fields
+- default index contract unchanged
 
-- category
-- tags
-- confidence
-- reason
-- sensitivity
-- owner/module
-- suggested use
-- stale/active/reference state
-- routing hints
-- custom method-specific fields
+Out of scope:
 
-## Proposed Metadata Shape
+- `--index-plan`
+- lifecycle start/end hooks
+- external/custom methods
+- LLM-backed classifier
+
+### v2: Index Plan Validation
+
+Scope:
+
+- `--index-plan <file>` parsing
+- `index-plan-v1` TOML model
+- `aascribe index plan validate`
+- async operation snapshotting of the submitted plan file
+- plan path in reports
+- plan parsing and validation tests
+
+Out of scope:
+
+- `index plan template`, `index plan schema`, and `index plan explain`
+- external method execution
+- lifecycle hook execution
+
+### v3: Lifecycle Hooks
+
+Scope:
+
+- start hooks for validation and run-level metadata only
+- end hooks for final run-level aggregation and report metadata
+- `run_methods` root metadata
+- lifecycle failure handling
+
+Decision: v3 start hooks do not feed downstream file/folder method input. They can validate and emit run-level metadata, but they do not mutate runtime context. Any future downstream dependency model needs a real dependency graph and is not part of this milestone.
+
+Decision: run-level lifecycle output lives only in the root `.aascribe_index_meta.json`.
+
+### v4: LLM And External Methods
+
+Scope:
+
+- LLM-backed classifier through the existing Gemini summarizer path
+- explicit custom/external method definitions through `[[methods.custom]]`
+- subprocess protocol, timeouts, output limits, and env allowlists
+- tests proving method discovery does not execute external programs
+
+`map` projection can ship earlier once v1 method fields are stable. It does not need to wait for v4.
+
+## Design Principles
+
+Keep these layers separate:
+
+- required base metadata: cache correctness and existing caller compatibility
+- file methods: per-file interpretation
+- folder methods: aggregate folder interpretation
+- lifecycle hooks: optional run-level validation and reporting
+
+Default behavior must preserve today's `index` contract:
+
+- base metadata always runs
+- passing `--metadata-method base` is accepted but is a no-op because base always runs
+- summary remains enabled by default unless `--no-summary` or `--no-metadata-methods` disables it
+- summary remains the existing inline hot path in v1, not a `FileMethod` implementation
+- summary-enabled indexing must use a real configured LLM summarizer
+- missing LLM config or missing configured API-key environment variable must return an error, not a local fake summary
+- `builtin.classify.v1` does not require a summary in v1; it should degrade gracefully to path and file-type signals when summary is unavailable
+- built-in classification can become default only after the output/report contract is stable
+
+## Metadata Shape
 
 Default method output should continue to populate the existing top-level fields on each `MetadataFile` so old callers keep working:
 
@@ -66,20 +125,15 @@ Default method output should continue to populate the existing top-level fields 
 }
 ```
 
-Each file metadata record should gain a structured `methods` object keyed by method id:
+Each file metadata record should gain an additive `methods` object keyed by method id:
 
 ```json
 {
   "path": "internal/index/index.go",
-  "size": 1234,
-  "mod_time": "2026-04-28T03:21:14.123456789Z",
-  "content_hash": "sha256:...",
-  "file_type": "text/go",
-  "summary": "Index engine and metadata persistence.",
-  "summarized_at": "2026-04-28T03:21:15Z",
   "status": "ok",
   "methods": {
     "builtin.classify.v1": {
+      "stage": "file",
       "generated_at": "2026-04-28T03:21:15Z",
       "input_hash": "sha256:...",
       "status": "ok",
@@ -89,30 +143,22 @@ Each file metadata record should gain a structured `methods` object keyed by met
         "confidence": 0.91,
         "reason": "Implements the index engine and metadata records."
       }
-    },
-    "builtin.routing.v1": {
-      "generated_at": "2026-04-28T03:21:15Z",
-      "input_hash": "sha256:...",
-      "status": "ok",
-      "fields": {
-        "suggested_use": "inspect_for_index_behavior",
-        "routing_hints": ["metadata", "change-detection"]
-      }
     }
   }
 }
 ```
 
-Folder metadata can use the same method namespace for aggregate interpretation:
+Folder metadata can use the same method envelope:
 
 ```json
 {
   "version": "index-meta-v1",
   "folder_path": "/repo/internal/index",
-  "last_updated": "2026-04-28T03:21:15Z",
   "methods": {
-    "builtin.folder-classify.v1": {
+    "builtin.routing.v1": {
+      "stage": "folder",
       "generated_at": "2026-04-28T03:21:15Z",
+      "input_hash": "sha256:...",
       "status": "ok",
       "fields": {
         "category_counts": {
@@ -120,129 +166,340 @@ Folder metadata can use the same method namespace for aggregate interpretation:
           "test": 1
         },
         "dominant_category": "source"
-      },
-      "input_hash": "sha256:..."
+      }
     }
   },
   "files": []
 }
 ```
 
-The first pass should treat this as an additive metadata extension. Do not bump the metadata version unless the implementation makes an incompatible persistence change. Existing `index-meta-v1` files should continue to read successfully, and new method fields should be omitted when absent.
+v3 lifecycle output should live only in the root metadata file:
 
-## Metadata Method Contract
-
-In Go, the index engine should depend on a small method interface:
-
-```go
-type MetadataMethod interface {
-    ID() string
-    Scope() MetadataScope
-    RequiresSummary() bool
-    BuildFile(ctx context.Context, input MetadataMethodInput) (map[string]any, error)
-    BuildFolder(ctx context.Context, input MetadataFolderInput) (map[string]any, error)
-}
-
-type MetadataMethodInput struct {
-    Path        string
-    FileName    string
-    Content     string
-    FileType    string
-    ContentHash string
-    Summary     string
-    NoSummary   bool
+```json
+{
+  "version": "index-meta-v1",
+  "folder_path": "/repo",
+  "run_methods": {
+    "plan.final-summary.v1": {
+      "stage": "end",
+      "generated_at": "2026-04-28T03:23:02Z",
+      "input_hash": "sha256:...",
+      "status": "ok",
+      "fields": {
+        "recommended_next_commands": [
+          "aascribe map .",
+          "aascribe search security ."
+        ]
+      }
+    }
+  },
+  "files": []
 }
 ```
 
-Important contract rules:
+This is an additive metadata extension. Do not bump `index-meta-v1` unless the implementation makes an incompatible persistence change. Existing metadata files must continue to read successfully, and new method fields should be omitted when absent.
 
-- method id must be stable and versioned, such as `builtin.classify.v1`
-- method return values are arbitrary key/value fields, but the persisted wrapper must include `generated_at`, `input_hash`, `status`, and `fields`
-- method failures should be recorded per file/folder without failing the whole index run
-- unchanged files can reuse method metadata only when `input_hash` still matches
-- `input_hash` must be derived from the exact inputs that affect the method result, including content hash, method id/version, method config or taxonomy digest, summary/no-summary state, and prompt/classifier version when applicable
-- `--refresh` should regenerate method metadata
-- dirty metadata should regenerate method metadata
-- methods must not mutate source files
-- methods that require summaries must not run when `--no-summary` is set unless the method explicitly supports an empty summary input
+## Method Interfaces
+
+Do not use one interface with `Start`, `BuildFile`, `BuildFolder`, and `End` no-ops. The roles have different inputs, output destinations, and failure semantics.
+
+Use a tiny shared core plus role interfaces:
+
+```go
+type Method interface {
+    ID() string
+    Fingerprint() string
+    Describe() MethodDescriptor
+}
+
+type FileMethod interface {
+    Method
+    BuildFile(ctx context.Context, input FileMethodInput) (MethodFields, error)
+}
+
+type FolderMethod interface {
+    Method
+    BuildFolder(ctx context.Context, input FolderMethodInput) (MethodFields, error)
+}
+
+type LifecycleStage string
+
+const (
+    LifecycleStart LifecycleStage = "start"
+    LifecycleEnd   LifecycleStage = "end"
+)
+
+type LifecycleMethod interface {
+    Method
+    Stage() LifecycleStage
+    Run(ctx context.Context, input LifecycleInput) (MethodFields, error)
+}
+```
+
+`MethodDescriptor` is the registry/discovery contract used by both engine logic and `aascribe index methods` output. It should include id, stage, scope, whether the method is required, whether it is always enabled, whether it is default-enabled, whether it requires a summary, whether it supports no-summary mode, a short `description`, a concise `purpose`, and config schema metadata.
+
+`MethodFields` is the method field-map payload persisted under `fields`. v1 can define it as `map[string]any`; typed accessors or a struct with known soft-schema fields plus an `Extra` bag can be added later if report aggregation needs more structure.
+
+`FileMethodInput` should include the stable file facts that can affect a file method: normalized path, file name, file type, content hash, summary text when available, no-summary state, and any method-selected text content. File methods receive only text/status-eligible files in v1.
+
+`FolderMethodInput` should include normalized folder path plus the stable direct child file/folder records needed for aggregation, including their selected method envelopes. v1 folder methods may re-run every indexing pass if reuse is not implemented, but when folder reuse is added its `input_hash` must be based on this canonical folder input.
+
+`LifecycleInput` is v3-only. Start lifecycle input should include run options, plan digest, and method config. End lifecycle input should include the final root tree, run stats, report aggregates, and plan digest.
+
+The registry holds all methods and dispatches by role interface. `aascribe index methods --stage file|folder|start|end` is type filtering over the registry.
+
+`Fingerprint()` is the method-owned config digest. It must fold in the method implementation version plus any config that can affect output, such as taxonomy path/content digest, prompt version, plan section, external command line, or declared external artifacts.
+
+Input hashing rule:
+
+```text
+input_hash = sha256(canonical(stage-input) || ID() || Fingerprint())
+```
+
+This single rule applies to file, folder, and lifecycle methods.
+
+`canonical(...)` means stable JSON serialization with lexically sorted object keys, no insignificant whitespace, and fixed timestamp and number formatting. Timestamp fields must use RFC 3339 nanosecond UTC formatting when present. Volatile fields such as `generated_at`, run timing, and transient run stats must be excluded. Aggregating methods should hash child method `input_hash` and stable `fields`, not child `generated_at`. The exact helper should be centralized so all method stages hash inputs the same way.
+
+## Method Status
+
+Method output status must use an explicit enum:
+
+- `ok`: method ran and returned fields
+- `failed`: method ran but returned an error
+- `skipped`: method intentionally did not run, such as a summary-dependent method under `--no-summary`
+
+Omitting a method key means the method was not selected for that run. Use `skipped` when the method was selected but gated by run options or file eligibility.
+
+## File Eligibility
+
+v1 file methods run only for text/status-eligible file records.
+
+Current binary behavior remains: binary files are recorded as not indexed with the existing reason, and summary/classification-style methods should either be omitted when not selected or recorded as `skipped` when selected but ineligible.
+
+If a future method wants binary input, it must explicitly declare binary support in its registry metadata and document its input contract.
+
+## Report Aggregation
+
+The report cannot aggregate arbitrary `map[string]any` fields.
+
+v1 report aggregation should understand only built-in typed fields:
+
+- `category`
+- `tags`
+- `confidence`
+- `reason`
+
+These are a documented soft schema for `builtin.classify.v1` and any method that opts into the same aggregation contract. Arbitrary custom fields remain persisted in metadata but are not counted by the generic report unless the method declares an aggregation contribution in a later milestone.
 
 ## CLI Surface
 
-First pass:
+Current behavior:
 
 ```bash
 aascribe index <path>
-aascribe index <path> --metadata-method classify
-aascribe index <path> --metadata-method classify --metadata-method routing
+aascribe index <path> --metadata-method base
+aascribe index <path> --metadata-method summary
 aascribe index <path> --no-metadata-methods
 ```
 
-Later:
+v1 optional method enablement:
 
 ```bash
-aascribe index <path> --taxonomy ./taxonomy.toml
 aascribe index <path> --metadata-method builtin.classify.v1
-aascribe index <path> --metadata-method custom:./methods/security.toml
+aascribe index <path> --metadata-method builtin.classify.v1 --metadata-method builtin.routing.v1
+aascribe index <path> --metadata-method summary --metadata-method builtin.classify.v1
 ```
 
-Default behavior should preserve the current index contract:
+`--metadata-method` should validate against the method registry instead of a hardcoded `base`/`summary` allowlist. Unknown method ids remain parse errors with actionable suggestions.
 
-- the default method set includes the current base metadata and summary behavior
-- when no metadata method flags are provided, `index` uses the default method set
-- when metadata method flags are provided, `index` uses the requested optional method set instead of auto-enabling optional defaults
-- base metadata remains always available
-- summary remains enabled by default, must use a real configured LLM summarizer, and is disabled only by `--no-summary`
-- summary-enabled indexing must return an error when LLM config or the configured API-key environment variable is unavailable; it must not silently use a local fake summarizer
-- built-in classification can become default only after the output/report contract is stable
-- `--no-metadata-methods` disables optional methods, not the required base metadata method
-- `--no-summary` should disable the default summary method and should not trigger extra summarization work for optional metadata methods; summary-dependent optional methods should be skipped or should run from non-summary inputs only
+v1 discovery:
 
-## Report Additions
+```bash
+aascribe index methods
+aascribe index methods --stage file
+aascribe index methods --stage folder
+aascribe index methods --stage start
+aascribe index methods --stage end
+aascribe --format json index methods
+```
 
-The index completion report should add a metadata-method section:
+`index methods` output must include descriptions, not just ids. Text output should show each method id, stage, default/required flags, and a short description. JSON output should expose the full `MethodDescriptor` so an AI can choose methods without reading hand-maintained docs.
 
-- enabled method ids
-- files classified
-- folders classified
-- method failures
-- category counts
-- low-confidence items
-- uncategorized items
-- token usage per method when available
+Example text:
 
-## Map Behavior
+```text
+available index methods:
+- builtin.classify.v1
+  stage: file
+  default_enabled: false
+  requires_summary: false
+  description: Classifies each text file for agent routing using path, file type, and optional summary signals.
 
-`map` should project method metadata into the routing view, but keep it compact:
+- builtin.routing.v1
+  stage: folder
+  default_enabled: false
+  requires_summary: false
+  description: Aggregates child file classifications into folder-level category and routing hints.
+```
 
-- show dominant folder category
-- show category/tag counts
-- include low-confidence warnings
-- avoid dumping every method field by default
+Example JSON:
 
-Detailed method metadata remains available in `.aascribe_index_meta.json`.
+```json
+{
+  "methods": [
+    {
+      "id": "builtin.classify.v1",
+      "stage": "file",
+      "scope": "file",
+      "required": false,
+      "default_enabled": false,
+      "always_enabled": false,
+      "requires_summary": false,
+      "supports_no_summary": true,
+      "description": "Classifies each text file for agent routing using path, file type, and optional summary signals.",
+      "purpose": "file_classification",
+      "config_schema": {
+        "low_confidence_threshold": "number"
+      }
+    }
+  ]
+}
+```
+
+v2 plan validation:
+
+```bash
+aascribe index <path> --index-plan ./aascribe.index.toml
+aascribe index plan validate ./aascribe.index.toml
+```
+
+Defer these helper commands until the plan format stabilizes:
+
+```bash
+aascribe index plan template
+aascribe index plan schema
+aascribe index plan explain
+```
+
+## Index Plan Shape
+
+Plan files should be TOML only in `index-plan-v1`.
+
+Built-in method stage and scope are registry facts. Do not repeat them in built-in method config.
+
+```toml
+version = "index-plan-v1"
+
+[methods]
+enabled = [
+  "summary",
+  "builtin.classify.v1",
+  "builtin.routing.v1"
+]
+
+[methods."summary"]
+style = "medium"
+
+[methods."builtin.classify.v1"]
+taxonomy = "./taxonomy.toml"
+low_confidence_threshold = 0.6
+
+[methods."builtin.routing.v1"]
+include_tags = true
+```
+
+Custom/external methods should be declared only through `[[methods.custom]]` in a plan. Do not add a separate `--metadata-method custom:...` code path; if a CLI shortcut is ever needed, make it syntactic sugar that builds a one-method plan internally.
+
+```toml
+version = "index-plan-v1"
+
+[[methods.custom]]
+id = "custom.security.v1"
+stage = "file"
+scope = "file"
+requires_summary = true
+command = ["./methods/security-check", "--format", "json"]
+timeout = "5s"
+```
+
+Relative paths inside a plan resolve from the plan file directory.
+
+## Async Plan Snapshot
+
+When `--async` is used with `--index-plan`, the submitter must snapshot the plan file into the operation directory before returning `OperationAccepted`.
+
+The detached worker must read the snapshotted copy, not the original path. This avoids a race where the plan changes between submission and worker startup, and it records exactly what ran.
+
+The external execution safety guarantee applies to async workers too: external programs may execute only during validated `aascribe index --index-plan <file>` execution, never during method listing or plan validation.
+
+## AI-Generated Plans
+
+Because `aascribe` is primarily called by AI agents, guidance must be discoverable from the CLI and not only from docs.
+
+The agent workflow should be:
+
+```text
+list methods -> read plan guidance -> inspect customer/repo goal -> draft index-plan-v1 TOML -> validate plan -> run index with --index-plan
+```
+
+The source of truth for current method capabilities is JSON output from `aascribe index methods`, not the hand-maintained tables in [../reference/index-methods.md](../reference/index-methods.md).
 
 ## Implementation Tasks
 
-1. Model the current base metadata extraction as a required default method.
-2. Model the current summary behavior as a default method that remains enabled unless `--no-summary` is set.
-3. Add optional method metadata fields to `Metadata` and `MetadataFile`.
-4. Introduce stable Go structs for method output, status, scope, and input hashing.
-5. Add a metadata method registry in `internal/index`.
-6. Implement a deterministic built-in classifier from path, file type, and summary.
-7. Add optional LLM-backed classifier using the existing Gemini summarizer path.
-8. Reuse method metadata for unchanged files by checking `input_hash`.
-9. Add CLI flags for enabling/disabling optional metadata methods.
-10. Thread metadata method flags through async indexing, including `IndexCommand`, `parseIndex`, `parseOperationRunIndex`, `indexArgs`, and async worker tests.
-11. Define `--no-summary` behavior for summary-dependent optional methods.
-12. Add metadata compatibility tests for reading old files without method fields and writing additive method fields.
-13. Extend report generation with method aggregate counts.
-14. Extend `map` projection with compact category/tag routing data.
-15. Update schemas and docs.
+### v1 Tasks
+
+1. Add method envelope structs for file/folder metadata with `stage`, `generated_at`, `input_hash`, `status`, and `fields`.
+2. Add method status enum: `ok`, `failed`, `skipped`.
+3. Add `Method`, `FileMethod`, and `FolderMethod` role interfaces with `Fingerprint()`.
+4. Add `MethodDescriptor` and use it for discovery output, `--no-summary` skip logic, and registry validation.
+5. Define `MethodFields`, `FileMethodInput`, and `FolderMethodInput`.
+6. Add input hashing helper using `canonical(stage-input) || ID() || Fingerprint()`.
+7. Implement stable canonical serialization for method input hashing, excluding volatile fields from aggregate inputs.
+8. Model current base extraction as required metadata outside optional method selection while preserving top-level fields.
+9. Keep current summary behavior as the existing inline hot path while preserving selection semantics.
+10. Add before/after regression tests proving unchanged summary-enabled indexing preserves the existing top-level metadata shape.
+11. Add deterministic built-in classifier from path, file type, and optional summary; it must not require summaries.
+12. Add deterministic `builtin.routing.v1` folder method that rolls up child `category`, `tags`, and `confidence` fields into category/tag counts, dominant category, low-confidence counts, and uncategorized counts.
+13. Add method registry in `internal/index`.
+14. Change `parseIndex` validation from the hardcoded `base`/`summary` allowlist to registered method ids, while keeping `base` as an accepted no-op.
+15. Reuse file method metadata for unchanged files by checking method `input_hash`.
+16. Punt folder method reuse in v1 unless `FolderMethodInput` canonical hashing is implemented; folder methods may re-run each pass.
+17. Define binary/text file eligibility and summary-gated `skipped` behavior from method descriptors.
+18. Add `aascribe index methods` text and JSON output.
+19. Add `--stage` filtering for `index methods`.
+20. Add metadata compatibility tests for reading old files without method fields and writing additive method fields.
+21. Add tests for `index methods` output and the guarantee that listing methods does not execute external programs.
+22. Extend report generation with built-in method counts using the documented classification/routing soft schema.
+23. Update docs/spec/index-spec.md and docs/reference/index-methods.md for v1 behavior. No new `.schema.json` file is required for this task unless the command output shape changes.
+
+### v2 Tasks
+
+1. Add `--index-plan <file>` parsing and `index-plan-v1` TOML structs.
+2. Add `aascribe index plan validate`.
+3. Validate unknown plan version, unknown method id, invalid config, duplicate custom id, and invalid relative paths.
+4. Validate that `--index-plan` is mutually exclusive with `--metadata-method` and `--no-metadata-methods`.
+5. Thread plan path through `IndexCommand`, `parseIndex`, `parseOperationRunIndex`, `indexArgs`, and worker tests.
+6. Snapshot plan files into the operation directory for async runs.
+7. Add report output for plan path and plan digest.
+
+### v3 Tasks
+
+1. Add `LifecycleMethod` and root-only `run_methods` metadata.
+2. Add start hooks for validation/run-level metadata only.
+3. Add end hooks for final aggregation/report metadata.
+4. Add required/optional lifecycle failure handling.
+5. Add tests that lifecycle hooks do not mutate downstream file/folder method input.
+
+### v4 Tasks
+
+1. Add LLM-backed classifier using the existing Gemini summarizer path.
+2. Add custom/external method descriptors through `[[methods.custom]]`.
+3. Add subprocess protocol, timeout, stdout/stderr limits, and env allowlists.
+4. Add tests for external method validation and execution failures.
+5. Add optional `map` projection once method fields are stable, if not already shipped earlier.
 
 ## Open Questions
 
-- Should built-in classification be enabled by default in the first implementation?
-- Should method metadata live directly under each file record, or under a folder-level sidecar keyed by path?
-- Should custom taxonomy files be TOML, JSON, or Markdown front matter?
+- Should built-in classification be enabled by default after v1 output/report behavior stabilizes?
 - Should low-confidence classification produce warnings, or only report entries?
 - Should method metadata affect `index eval`, or should eval remain base-cache-only for now?

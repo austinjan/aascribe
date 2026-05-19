@@ -197,6 +197,69 @@ func TestRunIndexBaseOnlyDoesNotRequireLLM(t *testing.T) {
 	}
 }
 
+func TestRunIndexClassifyAndRoutingDoesNotRequireLLM(t *testing.T) {
+	storePath := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	result, err := runIndex(storePath, cli.IndexCommand{
+		Path:            root,
+		Depth:           1,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{"builtin.classify.v1", "builtin.routing.v1"},
+	})
+	if err != nil {
+		t.Fatalf("expected classify/routing index success, got %v", err)
+	}
+	tree, ok := result.Data.(*index.PathIndexTree)
+	if !ok {
+		t.Fatalf("expected PathIndexTree, got %T", result.Data)
+	}
+	if tree.Run == nil || tree.Run.MethodStatusCounts["builtin.classify.v1:ok"] != 1 || tree.Run.MethodStatusCounts["builtin.routing.v1:ok"] != 1 {
+		t.Fatalf("expected method run counts, got %#v", tree.Run)
+	}
+	report, err := os.ReadFile(tree.ReportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	reportText := string(report)
+	for _, want := range []string{
+		"## Metadata Methods",
+		"- enabled_methods: [base, builtin.classify.v1, builtin.routing.v1]",
+		"- builtin.classify.v1:ok: 1",
+		"- source: 1",
+	} {
+		if !strings.Contains(reportText, want) {
+			t.Fatalf("expected report to contain %q, got:\n%s", want, reportText)
+		}
+	}
+}
+
+func TestRunIndexMethodsListsDescriptors(t *testing.T) {
+	result, err := runIndexMethods(cli.IndexMethodsCommand{Stage: "file"})
+	if err != nil {
+		t.Fatalf("expected index methods success, got %v", err)
+	}
+	if !strings.Contains(result.Text, "builtin.classify.v1") || !strings.Contains(result.Text, "description:") {
+		t.Fatalf("expected descriptor text, got %q", result.Text)
+	}
+	data, ok := result.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map data, got %T", result.Data)
+	}
+	methods, ok := data["methods"].([]index.MethodDescriptor)
+	if !ok || len(methods) == 0 {
+		t.Fatalf("expected method descriptors, got %#v", result.Data)
+	}
+	for _, method := range methods {
+		if method.Stage != index.MethodStageFile {
+			t.Fatalf("expected file-only descriptor, got %#v", method)
+		}
+	}
+}
+
 func TestRunIndexAsyncCreatesOperationAndStartsWorker(t *testing.T) {
 	storePath := t.TempDir()
 	root := t.TempDir()

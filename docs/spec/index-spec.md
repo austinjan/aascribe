@@ -28,6 +28,13 @@ aascribe index <path>
   [--max-file-size <bytes>]
 ```
 
+Discovery:
+
+```text
+aascribe index methods [--stage file|folder|start|end]
+aascribe --format json index methods [--stage file|folder|start|end]
+```
+
 | Flag              | Type       | Default     | Meaning                                                                 |
 | ----------------- | ---------- | ----------- | ----------------------------------------------------------------------- |
 | `<path>`          | positional | required    | Directory to index. Must exist and must be a directory.                  |
@@ -37,7 +44,7 @@ aascribe index <path>
 | `--async`         | bool       | `false`     | Start indexing as a persisted operation and return `OperationAccepted`.   |
 | `--refresh`       | bool       | `false`     | Reserved for incremental re-indexing. Accepted but not yet consumed.     |
 | `--no-summary`    | bool       | `false`     | Skip all summarization. Files are still walked, hashed, and recorded.    |
-| `--metadata-method` | string (×N) | default set | Select explicit metadata methods. Supported first methods: `base`, `summary`. |
+| `--metadata-method` | string (×N) | default set | Select explicit metadata methods. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.routing.v1`. |
 | `--no-metadata-methods` | bool | `false` | Disable optional/default methods beyond required base metadata. |
 | `--max-file-size` | int64      | `1_048_576` | Byte ceiling for summarization. `0` is valid; negative is rejected.      |
 
@@ -49,8 +56,11 @@ Metadata method selection:
 - `base` is required and always runs because it records path, size, mod time, content hash, file type, status, skip reason, and error state.
 - `summary` runs by default and requires a configured LLM provider. If LLM config or the configured API-key environment variable is unavailable, summary-enabled indexing fails instead of using a local fake summary.
 - `summary` is disabled by `--no-summary`, `--no-metadata-methods`, or by an explicit metadata method list that omits `summary`.
+- `builtin.classify.v1` is an optional deterministic file method. It does not require summary and can run from path/file-type signals under `--no-summary`.
+- `builtin.routing.v1` is an optional deterministic folder method. It aggregates child classification fields into category counts, tag counts, dominant category, low-confidence counts, and uncategorized counts.
 - When one or more `--metadata-method` flags are provided, `index` uses the requested method set plus required `base`.
 - `--metadata-method` and `--no-metadata-methods` are mutually exclusive.
+- `aascribe index methods` lists method descriptors. Text output is human/agent-readable; JSON output exposes the descriptor payload used by callers.
 
 When `--async` is set, the parent command creates a persisted operation under the active store, starts a background index worker process, and returns an `OperationAccepted` payload. The worker writes lifecycle snapshots to `<store>/operations/<operation-id>/operation.json`, event history to `events.jsonl`, and the final `PathIndexTree` result to `result.json`.
 

@@ -2,7 +2,12 @@ module github.com/austinjan/aascribe
 
 go 1.26.0
 
-require github.com/BurntSushi/toml v1.5.0
+require (
+	github.com/BurntSushi/toml v1.5.0
+	github.com/austinjan/agentcli-core v0.0.0-00010101000000-000000000000
+)
+
+replace github.com/austinjan/agentcli-core => ../agentcli-core
 
 require (
 	cloud.google.com/go v0.116.0 // indirect

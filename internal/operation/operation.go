@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/austinjan/aascribe/internal/apperr"
-	"github.com/austinjan/aascribe/pkg/llmoutput"
+	"github.com/austinjan/agentcli-core/largeoutput"
 )
 
 type State string
@@ -672,17 +672,17 @@ func prepareResultForStorage(storePath string, result *Result) (*Result, error) 
 	if err != nil {
 		return nil, apperr.Serialization("Failed to serialize operation result data.")
 	}
-	delivered, err := llmoutput.Deliver(storePath, "operation result", string(dataJSON), llmoutput.DefaultConfig())
+	delivered, err := largeoutput.Deliver(storePath, "operation result", string(dataJSON), largeoutput.DeliverOptions{Config: largeoutput.DefaultConfig()})
 	if err != nil {
 		return nil, err
 	}
-	if !delivered.Hint.Truncated {
+	if !delivered.Continuation.Truncated {
 		return result, nil
 	}
 
 	trimmed := *result
 	trimmed.Data = nil
-	trimmed.OutputID = delivered.Hint.OutputID
+	trimmed.OutputID = delivered.Continuation.OutputID
 	trimmed.Truncated = true
 	return &trimmed, nil
 }
