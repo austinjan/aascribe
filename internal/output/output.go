@@ -188,8 +188,33 @@ func errorGuidance(err error, appErr *apperr.Error, command, store string) (stri
 		if strings.Contains(message, "Unknown subcommand") {
 			return "Use one of the supported top-level commands.", []string{
 				"aascribe init",
+				"aascribe install skills --user",
 				"aascribe list",
 				"aascribe logs path",
+			}
+		}
+		if strings.Contains(message, "install requires a subcommand") || strings.Contains(message, "Unknown install subcommand") {
+			return "Choose the supported install subcommand and target scope.", []string{
+				"aascribe install skills --user",
+				"aascribe install skills -f ~/code",
+			}
+		}
+		if strings.Contains(message, "uninstall requires a subcommand") || strings.Contains(message, "Unknown uninstall subcommand") {
+			return "Choose the supported uninstall subcommand and target scope.", []string{
+				"aascribe uninstall skills --user",
+				"aascribe uninstall skills -f ~/code",
+			}
+		}
+		if strings.Contains(message, "install skills requires exactly one target") || strings.Contains(message, "install skills accepts exactly one target") {
+			return "Pick exactly one target: user scope or a folder root.", []string{
+				"aascribe install skills --user",
+				"aascribe install skills -f ~/code",
+			}
+		}
+		if strings.Contains(message, "uninstall skills requires exactly one target") || strings.Contains(message, "uninstall skills accepts exactly one target") {
+			return "Pick exactly one target: user scope or a folder root.", []string{
+				"aascribe uninstall skills --user",
+				"aascribe uninstall skills -f ~/code",
 			}
 		}
 		if strings.Contains(message, "logs requires a subcommand") || strings.Contains(message, "Unknown logs subcommand") {

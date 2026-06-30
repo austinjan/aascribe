@@ -53,6 +53,20 @@ type LogsClearCommand struct {
 
 func (c LogsClearCommand) Name() string { return "logs" }
 
+type InstallSkillsCommand struct {
+	User   bool
+	Folder string
+}
+
+func (c InstallSkillsCommand) Name() string { return "install" }
+
+type UninstallSkillsCommand struct {
+	User   bool
+	Folder string
+}
+
+func (c UninstallSkillsCommand) Name() string { return "uninstall" }
+
 type OutputListCommand struct{}
 
 func (c OutputListCommand) Name() string { return "output" }
@@ -337,6 +351,8 @@ Global flags:
 
 Commands:
   init         Create or reinitialize the local memory store layout
+  install      Install bundled aascribe skills into user or folder scope
+  uninstall    Remove bundled aascribe skills from user or folder scope
   logs         Inspect, export, or clear aascribe logs
   output       Browse stored oversized outputs for LLM-safe continuation
   operation    Inspect persisted long-running operation state
@@ -386,6 +402,8 @@ Current Implementation Status:
     describe
     chat
     summarize
+    install skills
+    uninstall skills
   CLI surface exists but command execution is still being implemented:
     remember, consolidate, recall, list, show, forget
 
@@ -448,6 +466,70 @@ Get More Information:
   aascribe logs export --help
   aascribe logs clear --help
   Read docs/logging.md for deeper log examples
+`)
+	case "install":
+		return strings.TrimSpace(`
+aascribe install - install bundled aascribe assets
+
+Purpose:
+  Install the bundled indexing skill into either the current user's Codex skill scope or a folder-local skill scope.
+
+Subcommands:
+  skills    Install bundled skills
+
+Examples:
+  aascribe install skills --user
+  aascribe install skills -f ~/code
+`)
+	case "install skills":
+		return strings.TrimSpace(`
+aascribe install skills - install bundled aascribe skills
+
+Purpose:
+  Copy the bundled indexing-folder skill and aascribe binary into a target skills directory.
+
+Usage:
+  aascribe install skills --user
+  aascribe install skills -f <folder>
+  aascribe install skills --folder <folder>
+
+Target Layout:
+  --user installs under ~/.codex/skills/indexing-folder/
+  -f/--folder installs under <folder>/skills/indexing-folder/
+
+Examples:
+  aascribe install skills --user
+  aascribe install skills -f ~/code
+`)
+	case "uninstall":
+		return strings.TrimSpace(`
+aascribe uninstall - remove bundled aascribe assets
+
+Purpose:
+  Remove installed aascribe skill files from either the current user's Codex skill scope or a folder-local skill scope.
+
+Subcommands:
+  skills    Remove bundled skills
+
+Examples:
+  aascribe uninstall skills --user
+  aascribe uninstall skills -f ~/code
+`)
+	case "uninstall skills":
+		return strings.TrimSpace(`
+aascribe uninstall skills - remove bundled aascribe skills
+
+Purpose:
+  Remove the managed indexing-folder skill directory created by aascribe install skills.
+
+Usage:
+  aascribe uninstall skills --user
+  aascribe uninstall skills -f <folder>
+  aascribe uninstall skills --folder <folder>
+
+Examples:
+  aascribe uninstall skills --user
+  aascribe uninstall skills -f ~/code
 `)
 	case "logs path":
 		return strings.TrimSpace(`
@@ -1032,6 +1114,18 @@ func classifyHelpTopic(tokens []string) string {
 		}
 		return "logs"
 	}
+	if tokens[0] == "install" {
+		if len(tokens) > 1 {
+			return "install " + tokens[1]
+		}
+		return "install"
+	}
+	if tokens[0] == "uninstall" {
+		if len(tokens) > 1 {
+			return "uninstall " + tokens[1]
+		}
+		return "uninstall"
+	}
 	if tokens[0] == "output" {
 		if len(tokens) > 1 {
 			return "output " + tokens[1]
@@ -1127,6 +1221,10 @@ func parseSubcommand(name string, args []string) (Command, error) {
 	switch name {
 	case "init":
 		return parseInit(args)
+	case "install":
+		return parseInstall(args)
+	case "uninstall":
+		return parseUninstall(args)
 	case "logs":
 		return parseLogs(args)
 	case "output":
@@ -1160,6 +1258,76 @@ func parseSubcommand(name string, args []string) (Command, error) {
 	default:
 		return nil, newUnknownCommandError(name)
 	}
+}
+
+func parseInstall(args []string) (Command, error) {
+	if len(args) == 0 {
+		return nil, newParseError(ParseErrorMissingNestedCommand, "install", "", "install requires a subcommand: skills.")
+	}
+	switch args[0] {
+	case "skills", "skill":
+		return parseInstallSkills(args[1:])
+	default:
+		return nil, newUnknownNestedCommandError("install", args[0], []string{"skills"})
+	}
+}
+
+func parseInstallSkills(args []string) (Command, error) {
+	fs := newFlagSet("install skills")
+	var cmd InstallSkillsCommand
+	fs.BoolVar(&cmd.User, "user", false, "")
+	fs.StringVar(&cmd.Folder, "f", "", "")
+	fs.StringVar(&cmd.Folder, "folder", "", "")
+	if err := parseFlags(fs, args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 0 {
+		return nil, newParseError(ParseErrorDoesNotAcceptArgs, "install skills", "", "install skills does not accept positional arguments.")
+	}
+	if err := validateSkillTarget("install skills", cmd.User, cmd.Folder); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+func parseUninstall(args []string) (Command, error) {
+	if len(args) == 0 {
+		return nil, newParseError(ParseErrorMissingNestedCommand, "uninstall", "", "uninstall requires a subcommand: skills.")
+	}
+	switch args[0] {
+	case "skills", "skill":
+		return parseUninstallSkills(args[1:])
+	default:
+		return nil, newUnknownNestedCommandError("uninstall", args[0], []string{"skills"})
+	}
+}
+
+func parseUninstallSkills(args []string) (Command, error) {
+	fs := newFlagSet("uninstall skills")
+	var cmd UninstallSkillsCommand
+	fs.BoolVar(&cmd.User, "user", false, "")
+	fs.StringVar(&cmd.Folder, "f", "", "")
+	fs.StringVar(&cmd.Folder, "folder", "", "")
+	if err := parseFlags(fs, args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 0 {
+		return nil, newParseError(ParseErrorDoesNotAcceptArgs, "uninstall skills", "", "uninstall skills does not accept positional arguments.")
+	}
+	if err := validateSkillTarget("uninstall skills", cmd.User, cmd.Folder); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+func validateSkillTarget(scope string, user bool, folder string) error {
+	if user && strings.TrimSpace(folder) != "" {
+		return newParseError(ParseErrorInvalidFlagValue, scope, "--user", "%s accepts exactly one target: --user or -f/--folder.", scope)
+	}
+	if !user && strings.TrimSpace(folder) == "" {
+		return newParseError(ParseErrorMissingRequiredFlag, scope, "--user", "%s requires exactly one target: --user or -f/--folder <folder>.", scope)
+	}
+	return nil
 }
 
 func parseLogs(args []string) (Command, error) {

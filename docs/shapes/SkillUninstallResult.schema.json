@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "SkillUninstallResult.schema.json",
+  "title": "SkillUninstallResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "skill",
+    "scope",
+    "target_root",
+    "install_dir",
+    "removed",
+    "removed_paths",
+    "already_absent"
+  ],
+  "properties": {
+    "skill": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["user", "folder"]
+    },
+    "target_root": {
+      "type": "string"
+    },
+    "install_dir": {
+      "type": "string"
+    },
+    "removed": {
+      "type": "boolean"
+    },
+    "removed_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "already_absent": {
+      "type": "boolean"
+    }
+  }
+}

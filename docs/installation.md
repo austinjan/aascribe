@@ -89,6 +89,41 @@ skills/indexing-folder/bin/aascribe.exe
 
 ## Install The indexing-folder Skill
 
+The CLI can install the bundled skill into user scope:
+
+```bash
+./dist/aascribe install skills --user
+```
+
+This writes:
+
+```text
+~/.codex/skills/indexing-folder/SKILL.md
+~/.codex/skills/indexing-folder/bin/aascribe
+```
+
+To install into a specific folder root:
+
+```bash
+./dist/aascribe install skills -f ~/code
+```
+
+This writes:
+
+```text
+~/code/skills/indexing-folder/SKILL.md
+~/code/skills/indexing-folder/bin/aascribe
+```
+
+To remove all files created for the bundled skill:
+
+```bash
+./dist/aascribe uninstall skills --user
+./dist/aascribe uninstall skills -f ~/code
+```
+
+## Install The indexing-folder Skill With Scripts
+
 The repository provides three install scripts:
 
 ```text

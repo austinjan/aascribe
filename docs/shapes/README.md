@@ -34,6 +34,8 @@ This directory is the checked-in source of truth for `aascribe` command `OutputS
 - `PathIndexTree.schema.json`
 - `RememberResult.schema.json`
 - `SearchResult.schema.json`
+- `SkillInstallResult.schema.json`
+- `SkillUninstallResult.schema.json`
 - `StoreInitResult.schema.json`
 
 ## Notes

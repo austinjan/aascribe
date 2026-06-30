@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "SkillInstallResult.schema.json",
+  "title": "SkillInstallResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "skill",
+    "scope",
+    "target_root",
+    "install_dir",
+    "skill_path",
+    "binary_path",
+    "written_files"
+  ],
+  "properties": {
+    "skill": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["user", "folder"]
+    },
+    "target_root": {
+      "type": "string"
+    },
+    "install_dir": {
+      "type": "string"
+    },
+    "skill_path": {
+      "type": "string"
+    },
+    "binary_path": {
+      "type": "string"
+    },
+    "written_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

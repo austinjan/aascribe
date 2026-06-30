@@ -61,7 +61,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	logStorePath := storePath
-	if parsed.Command.Name() == "logs" || parsed.Command.Name() == "init" {
+	if parsed.Command.Name() == "logs" || parsed.Command.Name() == "init" || parsed.Command.Name() == "install" || parsed.Command.Name() == "uninstall" {
 		logStorePath = ""
 	}
 	logger := logging.New(stderr, logStorePath, parsed.Verbose)

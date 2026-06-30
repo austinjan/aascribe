@@ -20,6 +20,7 @@ import (
 	"github.com/austinjan/aascribe/internal/operation"
 	"github.com/austinjan/aascribe/internal/output"
 	"github.com/austinjan/aascribe/internal/search"
+	"github.com/austinjan/aascribe/internal/skill"
 	"github.com/austinjan/aascribe/internal/store"
 	"github.com/austinjan/aascribe/pkg/llmoutput"
 )
@@ -36,6 +37,10 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 		return runLogsExport(storePath, cmd.Output)
 	case cli.LogsClearCommand:
 		return runLogsClear(storePath, cmd.Force)
+	case cli.InstallSkillsCommand:
+		return runInstallSkills(cmd)
+	case cli.UninstallSkillsCommand:
+		return runUninstallSkills(cmd)
 	case cli.OutputListCommand:
 		return runOutputList(storePath)
 	case cli.OutputGenerateCommand:
@@ -99,6 +104,28 @@ func Execute(command cli.Command, storePath string) (*output.CommandResult, erro
 	default:
 		return nil, apperr.NotImplemented("unknown")
 	}
+}
+
+func runInstallSkills(cmd cli.InstallSkillsCommand) (*output.CommandResult, error) {
+	result, err := skill.Install(skill.Target{User: cmd.User, Folder: cmd.Folder})
+	if err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: result,
+		Text: renderInstallSkillsText(result),
+	}, nil
+}
+
+func runUninstallSkills(cmd cli.UninstallSkillsCommand) (*output.CommandResult, error) {
+	result, err := skill.Uninstall(skill.Target{User: cmd.User, Folder: cmd.Folder})
+	if err != nil {
+		return nil, err
+	}
+	return &output.CommandResult{
+		Data: result,
+		Text: renderUninstallSkillsText(result),
+	}, nil
 }
 
 var startAsyncIndexProcess = startIndexWorkerProcess
@@ -656,6 +683,39 @@ func renderSearchText(result *search.Result) string {
 		lines = append(lines, "next: inspect the matched files before making final claims")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func renderInstallSkillsText(result *skill.InstallResult) string {
+	if result == nil {
+		return ""
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("Installed %s skill to %s scope", result.Skill, result.Scope),
+		"skill: " + result.SkillPath,
+		"binary: " + result.BinaryPath,
+		"next: " + result.BinaryPath + " --version",
+	}, "\n")
+}
+
+func renderUninstallSkillsText(result *skill.UninstallResult) string {
+	if result == nil {
+		return ""
+	}
+	if result.AlreadyAbsent {
+		return strings.Join([]string{
+			fmt.Sprintf("%s skill was already absent from %s scope", result.Skill, result.Scope),
+			"checked: " + result.InstallDir,
+		}, "\n")
+	}
+	next := "aascribe install skills -f " + result.TargetRoot
+	if result.Scope == "user" {
+		next = "aascribe install skills --user"
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("Removed %s skill from %s scope", result.Skill, result.Scope),
+		"removed: " + result.InstallDir,
+		"next: " + next,
+	}, "\n")
 }
 
 func renderOperationListText(result *operation.List) string {

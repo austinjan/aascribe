@@ -14,6 +14,8 @@ Complete command and flag reference for `aascribe`.
 - [Exit codes](#exit-codes)
 - [Commands](#commands)
   - [init](#init)
+  - [install](#install)
+  - [uninstall](#uninstall)
   - [logs](#logs)
   - [operation](#operation)
   - [index](#index)
@@ -153,6 +155,116 @@ OutputShape: StoreInitResult
   "meta": {
     "command": "init",
     "duration_ms": 4,
+    "store": "/path/to/project/data/memory"
+  }
+}
+```
+
+---
+
+### `install`
+
+Install bundled aascribe skills into either the current user's Codex skill scope or a folder-local skill scope.
+
+```
+aascribe install skills --user
+aascribe install skills -f <folder>
+aascribe install skills --folder <folder>
+```
+
+| Flag | Description |
+|---|---|
+| `--user`, `-user` | Install into the current user's Codex scope at `~/.codex/skills/indexing-folder/` |
+| `-f <folder>` | Install into `<folder>/skills/indexing-folder/` |
+| `--folder <folder>` | Same as `-f <folder>` |
+
+Exactly one target flag is required.
+
+**Examples**
+
+```bash
+aascribe install skills --user
+aascribe install skills -f ~/code
+```
+
+OutputShape: SkillInstallResult
+
+**Output**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "skill": "indexing-folder",
+    "scope": "folder",
+    "target_root": "/Users/you/code",
+    "install_dir": "/Users/you/code/skills/indexing-folder",
+    "skill_path": "/Users/you/code/skills/indexing-folder/SKILL.md",
+    "binary_path": "/Users/you/code/skills/indexing-folder/bin/aascribe",
+    "written_files": [
+      "/Users/you/code/skills/indexing-folder/SKILL.md",
+      "/Users/you/code/skills/indexing-folder/bin/aascribe"
+    ]
+  },
+  "meta": {
+    "command": "install",
+    "duration_ms": 4,
+    "store": "/path/to/project/data/memory"
+  }
+}
+```
+
+---
+
+### `uninstall`
+
+Remove the bundled aascribe skill directory created by `aascribe install skills`.
+
+```
+aascribe uninstall skills --user
+aascribe uninstall skills -f <folder>
+aascribe uninstall skills --folder <folder>
+```
+
+| Flag | Description |
+|---|---|
+| `--user`, `-user` | Remove `~/.codex/skills/indexing-folder/` |
+| `-f <folder>` | Remove `<folder>/skills/indexing-folder/` |
+| `--folder <folder>` | Same as `-f <folder>` |
+
+Exactly one target flag is required. The command removes the managed `indexing-folder` skill directory, including its bundled binary and related files.
+
+**Examples**
+
+```bash
+aascribe uninstall skills --user
+aascribe uninstall skills -f ~/code
+```
+
+OutputShape: SkillUninstallResult
+
+**Output**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "skill": "indexing-folder",
+    "scope": "folder",
+    "target_root": "/Users/you/code",
+    "install_dir": "/Users/you/code/skills/indexing-folder",
+    "removed": true,
+    "removed_paths": [
+      "/Users/you/code/skills/indexing-folder",
+      "/Users/you/code/skills/indexing-folder/SKILL.md",
+      "/Users/you/code/skills/indexing-folder/bin",
+      "/Users/you/code/skills/indexing-folder/bin/aascribe"
+    ],
+    "already_absent": false
+  },
+  "meta": {
+    "command": "uninstall",
+    "duration_ms": 3,
     "store": "/path/to/project/data/memory"
   }
 }
