@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/austinjan/aascribe/internal/cli"
 	"github.com/austinjan/aascribe/internal/config"
@@ -99,7 +100,14 @@ timeout_seconds = 30
 		if !strings.Contains(prompt, "File path:") || !strings.Contains(prompt, "notes.txt") {
 			t.Fatalf("expected file path in prompt, got %q", prompt)
 		}
-		return &llm.TextResponse{Text: "LLM index summary."}, nil
+		return &llm.TextResponse{
+			Text: "LLM index summary.",
+			Usage: llm.Usage{
+				PromptTokenCount:     11,
+				CandidatesTokenCount: 7,
+				TotalTokenCount:      18,
+			},
+		}, nil
 	}
 	defer func() {
 		promptRunner = original
@@ -120,6 +128,363 @@ timeout_seconds = 30
 	}
 	if len(tree.Tree.Children) != 1 || tree.Tree.Children[0].Summary != "LLM index summary." {
 		t.Fatalf("expected LLM summary in index result, got %#v", tree.Tree.Children)
+	}
+	if tree.ReportPath == "" {
+		t.Fatalf("expected report path in index result")
+	}
+	report, err := os.ReadFile(tree.ReportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	reportText := string(report)
+	for _, want := range []string{
+		"# Indexing Report",
+		"- mode: sync",
+		"- total_discovered_files: 1",
+		"- summarized_files: 1",
+		"- prompt_tokens: 11",
+		"- output_tokens: 7",
+		"- total_tokens: 18",
+	} {
+		if !strings.Contains(reportText, want) {
+			t.Fatalf("expected report to contain %q, got:\n%s", want, reportText)
+		}
+	}
+}
+
+func TestRunIndexRequiresLLMWhenSummaryEnabled(t *testing.T) {
+	storePath := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello world\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	_, err := runIndex(storePath, cli.IndexCommand{
+		Path:        root,
+		Depth:       1,
+		MaxFileSize: 1024,
+	})
+	if err == nil {
+		t.Fatalf("expected missing LLM config error")
+	}
+	if !strings.Contains(err.Error(), "No config file") && !strings.Contains(err.Error(), "Invalid config") && !strings.Contains(err.Error(), "Environment variable") {
+		t.Fatalf("expected LLM config or secret error, got %v", err)
+	}
+}
+
+func TestRunIndexBaseOnlyDoesNotRequireLLM(t *testing.T) {
+	storePath := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello world\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	result, err := runIndex(storePath, cli.IndexCommand{
+		Path:              root,
+		Depth:             1,
+		MaxFileSize:       1024,
+		NoMetadataMethods: true,
+	})
+	if err != nil {
+		t.Fatalf("expected base-only index success, got %v", err)
+	}
+	tree, ok := result.Data.(*index.PathIndexTree)
+	if !ok {
+		t.Fatalf("expected PathIndexTree, got %T", result.Data)
+	}
+	if len(tree.Tree.Children) != 1 || tree.Tree.Children[0].Summary != "" {
+		t.Fatalf("expected base-only index without summary, got %#v", tree.Tree.Children)
+	}
+}
+
+func TestRunIndexClassifyAndRoutingDoesNotRequireLLM(t *testing.T) {
+	storePath := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	result, err := runIndex(storePath, cli.IndexCommand{
+		Path:            root,
+		Depth:           1,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{"builtin.classify.v1", "builtin.routing.v1"},
+	})
+	if err != nil {
+		t.Fatalf("expected classify/routing index success, got %v", err)
+	}
+	tree, ok := result.Data.(*index.PathIndexTree)
+	if !ok {
+		t.Fatalf("expected PathIndexTree, got %T", result.Data)
+	}
+	if tree.Run == nil || tree.Run.MethodStatusCounts["builtin.classify.v1:ok"] != 1 || tree.Run.MethodStatusCounts["builtin.routing.v1:ok"] != 1 {
+		t.Fatalf("expected method run counts, got %#v", tree.Run)
+	}
+	report, err := os.ReadFile(tree.ReportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	reportText := string(report)
+	for _, want := range []string{
+		"## Metadata Methods",
+		"- enabled_methods: [base, builtin.classify.v1, builtin.routing.v1]",
+		"- builtin.classify.v1:ok: 1",
+		"- source: 1",
+	} {
+		if !strings.Contains(reportText, want) {
+			t.Fatalf("expected report to contain %q, got:\n%s", want, reportText)
+		}
+	}
+}
+
+func TestRunIndexMethodsListsDescriptors(t *testing.T) {
+	result, err := runIndexMethods(cli.IndexMethodsCommand{Stage: "file"})
+	if err != nil {
+		t.Fatalf("expected index methods success, got %v", err)
+	}
+	if !strings.Contains(result.Text, "builtin.classify.v1") || !strings.Contains(result.Text, "builtin.retrieval.v1") || !strings.Contains(result.Text, "description:") {
+		t.Fatalf("expected descriptor text, got %q", result.Text)
+	}
+	data, ok := result.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map data, got %T", result.Data)
+	}
+	methods, ok := data["methods"].([]index.MethodDescriptor)
+	if !ok || len(methods) == 0 {
+		t.Fatalf("expected method descriptors, got %#v", result.Data)
+	}
+	for _, method := range methods {
+		if method.Stage != index.MethodStageFile {
+			t.Fatalf("expected file-only descriptor, got %#v", method)
+		}
+	}
+}
+
+func TestRunIndexPlanValidate(t *testing.T) {
+	root := t.TempDir()
+	planPath := filepath.Join(root, "aascribe.index.toml")
+	if err := os.WriteFile(planPath, []byte(`version = "index-plan-v1"
+
+[methods]
+enabled = ["builtin.classify.v1"]
+`), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	result, err := runIndexPlanValidate(cli.IndexPlanValidateCommand{Path: planPath})
+	if err != nil {
+		t.Fatalf("expected validation success, got %v", err)
+	}
+	if !strings.Contains(result.Text, "index plan valid") || !strings.Contains(result.Text, "builtin.classify.v1") {
+		t.Fatalf("unexpected validation text: %q", result.Text)
+	}
+}
+
+func TestRunIndexReviewWorkflowCreatesAgentArtifacts(t *testing.T) {
+	workspace := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get wd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(oldWD)
+
+	storePath := filepath.Join(workspace, "data", "memory")
+	root := filepath.Join(workspace, "coding")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	metadata := `{
+  "version": "index-meta-v1",
+  "folder_path": "` + root + `",
+  "files": [
+    {
+      "path": "coding/CLAUDE.md",
+      "methods": {
+        "builtin.retrieval.v1": {
+          "fields": {
+            "aliases": [{"from": "Example", "to": "HTTP client"}],
+            "retrieval_terms": ["` + "bat file.py" + `"]
+          }
+        }
+      }
+    }
+  ]
+}`
+	if err := os.WriteFile(filepath.Join(root, ".aascribe_index_meta.json"), []byte(metadata), 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	reviewResult, err := runIndexReview(storePath, cli.IndexReviewCommand{Path: root, Method: "builtin.retrieval.v1"})
+	if err != nil {
+		t.Fatalf("expected review success, got %v", err)
+	}
+	review, ok := reviewResult.Data.(indexReviewReport)
+	if !ok {
+		t.Fatalf("expected review report, got %T", reviewResult.Data)
+	}
+	if review.CheckpointID == "" || len(review.Findings) == 0 || !review.Writes["checkpoint"] || review.Writes["prompt"] {
+		t.Fatalf("unexpected review report: %#v", review)
+	}
+	if _, err := os.Stat(review.ReviewJSON); err != nil {
+		t.Fatalf("expected review json artifact: %v", err)
+	}
+
+	proposalResult, err := runIndexReviewPropose(storePath, cli.IndexReviewProposeCommand{ReviewJSON: review.ReviewJSON})
+	if err != nil {
+		t.Fatalf("expected proposal success, got %v", err)
+	}
+	proposal, ok := proposalResult.Data.(indexReviewProposal)
+	if !ok {
+		t.Fatalf("expected proposal, got %T", proposalResult.Data)
+	}
+	if proposal.PromptPath != filepath.Join("prompts", "retrieval", "generate.v1.md") || !strings.Contains(proposal.ProposedContent, "Return strict JSON only") {
+		t.Fatalf("unexpected proposal: %#v", proposal)
+	}
+
+	patchResult, err := runIndexReviewPatch(storePath, cli.IndexReviewPatchCommand{ProposalJSON: proposal.Artifacts[0]["path"]})
+	if err != nil {
+		t.Fatalf("expected patch success, got %v", err)
+	}
+	if !strings.Contains(patchResult.Text, "prompt_patched") {
+		t.Fatalf("unexpected patch text: %q", patchResult.Text)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "prompts", "retrieval", "generate.v1.md")); err != nil {
+		t.Fatalf("expected prompt file: %v", err)
+	}
+
+	statusResult, err := runIndexReviewStatus(storePath, review.CheckpointID)
+	if err != nil {
+		t.Fatalf("expected status success, got %v", err)
+	}
+	if !strings.Contains(statusResult.Text, "prompt_patched") {
+		t.Fatalf("unexpected status text: %q", statusResult.Text)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("- **xh** - HTTP client\n"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+	indexResult, err := runIndex(storePath, cli.IndexCommand{
+		Path:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{index.MethodBase, index.MethodRetrievalV1},
+	})
+	if err != nil {
+		t.Fatalf("expected index success with patched prompt, got %v", err)
+	}
+	tree, ok := indexResult.Data.(*index.PathIndexTree)
+	if !ok || tree.ReportPath == "" {
+		t.Fatalf("expected index tree with report path, got %#v", indexResult.Data)
+	}
+	updatedMeta, err := os.ReadFile(filepath.Join(root, ".aascribe_index_meta.json"))
+	if err != nil {
+		t.Fatalf("read updated metadata: %v", err)
+	}
+	if !strings.Contains(string(updatedMeta), "source_quote") || !strings.Contains(string(updatedMeta), "prompts/retrieval/generate.v1.md") {
+		t.Fatalf("expected patched prompt to affect retrieval metadata, got %s", string(updatedMeta))
+	}
+
+	if _, err := runIndexReviewRestore(storePath, review.CheckpointID); err != nil {
+		t.Fatalf("expected restore success, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "prompts", "retrieval", "generate.v1.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected restore to remove prompt created after checkpoint, stat err=%v", err)
+	}
+}
+
+func TestRunIndexUsesIndexPlan(t *testing.T) {
+	storePath := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	planPath := filepath.Join(root, "aascribe.index.toml")
+	if err := os.WriteFile(planPath, []byte(`version = "index-plan-v1"
+
+[methods]
+enabled = ["builtin.classify.v1", "builtin.routing.v1"]
+`), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	result, err := runIndex(storePath, cli.IndexCommand{
+		Path:        root,
+		Depth:       1,
+		MaxFileSize: 1024,
+		IndexPlan:   planPath,
+	})
+	if err != nil {
+		t.Fatalf("expected index plan run success, got %v", err)
+	}
+	tree, ok := result.Data.(*index.PathIndexTree)
+	if !ok {
+		t.Fatalf("expected PathIndexTree, got %T", result.Data)
+	}
+	if tree.Run == nil || tree.Run.MethodStatusCounts["builtin.classify.v1:ok"] == 0 || tree.Run.MethodStatusCounts["builtin.routing.v1:ok"] == 0 {
+		t.Fatalf("expected plan-selected method counts, got %#v", tree.Run)
+	}
+	report, err := os.ReadFile(tree.ReportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	reportText := string(report)
+	for _, want := range []string{
+		"- index_plan: " + planPath,
+		"- index_plan_digest: sha256:",
+		"- metadata_methods: [base, builtin.classify.v1, builtin.routing.v1]",
+	} {
+		if !strings.Contains(reportText, want) {
+			t.Fatalf("expected report to contain %q, got:\n%s", want, reportText)
+		}
+	}
+}
+
+func TestRunIndexAsyncSnapshotsIndexPlan(t *testing.T) {
+	storePath := t.TempDir()
+	root := t.TempDir()
+	planPath := filepath.Join(root, "aascribe.index.toml")
+	if err := os.WriteFile(planPath, []byte(`version = "index-plan-v1"
+
+[methods]
+enabled = ["builtin.classify.v1"]
+`), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	var startedOperation string
+	var startedCommand cli.IndexCommand
+	original := startAsyncIndexProcess
+	startAsyncIndexProcess = func(storePath, operationID string, cmd cli.IndexCommand) error {
+		startedOperation = operationID
+		startedCommand = cmd
+		return nil
+	}
+	defer func() {
+		startAsyncIndexProcess = original
+	}()
+
+	_, err := runIndex(storePath, cli.IndexCommand{
+		Path:        root,
+		Depth:       1,
+		MaxFileSize: 1024,
+		Async:       true,
+		IndexPlan:   planPath,
+	})
+	if err != nil {
+		t.Fatalf("expected async index accepted, got %v", err)
+	}
+	if startedOperation == "" {
+		t.Fatalf("expected worker start")
+	}
+	if filepath.Base(startedCommand.IndexPlan) != "index-plan.toml" || startedCommand.IndexPlan == planPath {
+		t.Fatalf("expected snapshotted plan path, got %#v", startedCommand)
+	}
+	if _, err := os.Stat(startedCommand.IndexPlan); err != nil {
+		t.Fatalf("expected snapshotted plan file: %v", err)
 	}
 }
 
@@ -174,6 +539,84 @@ func TestRunIndexAsyncCreatesOperationAndStartsWorker(t *testing.T) {
 	}
 }
 
+func TestIndexArgsPreservesMetadataMethodFlags(t *testing.T) {
+	args := indexArgs(cli.IndexCommand{
+		Path:            "./tests",
+		Depth:           2,
+		Concurrency:     4,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{"summary"},
+	})
+	rendered := strings.Join(args, " ")
+	if !strings.Contains(rendered, "--metadata-method summary") {
+		t.Fatalf("expected metadata method flag in args, got %#v", args)
+	}
+	if args[len(args)-1] != "./tests" {
+		t.Fatalf("expected path to remain last, got %#v", args)
+	}
+}
+
+func TestIndexArgsPreservesNoMetadataMethodsFlag(t *testing.T) {
+	args := indexArgs(cli.IndexCommand{
+		Path:              "./tests",
+		Depth:             2,
+		Concurrency:       4,
+		MaxFileSize:       1024,
+		NoMetadataMethods: true,
+	})
+	rendered := strings.Join(args, " ")
+	if !strings.Contains(rendered, "--no-metadata-methods") {
+		t.Fatalf("expected no metadata methods flag in args, got %#v", args)
+	}
+	if args[len(args)-1] != "./tests" {
+		t.Fatalf("expected path to remain last, got %#v", args)
+	}
+}
+
+func TestIndexArgsPreservesIndexPlanWithoutManualMethods(t *testing.T) {
+	args := indexArgs(cli.IndexCommand{
+		Path:            "./tests",
+		Depth:           2,
+		Concurrency:     4,
+		MaxFileSize:     1024,
+		IndexPlan:       "./aascribe.index.toml",
+		MetadataMethods: []string{"builtin.classify.v1"},
+	})
+	rendered := strings.Join(args, " ")
+	if !strings.Contains(rendered, "--index-plan ./aascribe.index.toml") {
+		t.Fatalf("expected index plan flag in args, got %#v", args)
+	}
+	if strings.Contains(rendered, "--metadata-method") {
+		t.Fatalf("did not expect metadata method flags when index plan is present, got %#v", args)
+	}
+	if args[len(args)-1] != "./tests" {
+		t.Fatalf("expected path to remain last, got %#v", args)
+	}
+}
+
+func TestCreateIndexReportFileAvoidsSameSecondCollision(t *testing.T) {
+	reportDir := t.TempDir()
+	finishedAt := time.Date(2026, 4, 29, 3, 3, 31, 0, time.UTC)
+
+	first, firstFile, err := createIndexReportFile(reportDir, finishedAt)
+	if err != nil {
+		t.Fatalf("create first report: %v", err)
+	}
+	defer firstFile.Close()
+	if filepath.Base(first) != "2026-04-29-030331-indexing-report.md" {
+		t.Fatalf("unexpected first report path: %s", first)
+	}
+
+	second, secondFile, err := createIndexReportFile(reportDir, finishedAt)
+	if err != nil {
+		t.Fatalf("create second report: %v", err)
+	}
+	defer secondFile.Close()
+	if filepath.Base(second) != "2026-04-29-030331-2-indexing-report.md" {
+		t.Fatalf("unexpected second report path: %s", second)
+	}
+}
+
 func TestRunOperationRunIndexCompletesOperationResult(t *testing.T) {
 	storePath := t.TempDir()
 	root := t.TempDir()
@@ -222,6 +665,9 @@ func TestRunOperationRunIndexCompletesOperationResult(t *testing.T) {
 	}
 	if !strings.Contains(string(encoded), "notes.txt") {
 		t.Fatalf("expected indexed file in result data, got %s", string(encoded))
+	}
+	if !strings.Contains(string(encoded), "report_path") {
+		t.Fatalf("expected report_path in result data, got %s", string(encoded))
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 type Format string
 
@@ -36,6 +36,13 @@ type InitCommand struct {
 }
 
 func (c InitCommand) Name() string { return "init" }
+
+type ConfigSetCommand struct {
+	Key   string
+	Value string
+}
+
+func (c ConfigSetCommand) Name() string { return "config" }
 
 type LogsPathCommand struct{}
 
@@ -100,18 +107,69 @@ type OutputGenerateCommand struct {
 func (c OutputGenerateCommand) Name() string { return "output" }
 
 type IndexCommand struct {
-	Path        string
-	Depth       int
-	Include     []string
-	Exclude     []string
-	Concurrency int
-	Async       bool
-	Refresh     bool
-	NoSummary   bool
-	MaxFileSize int64
+	Path              string
+	Depth             int
+	Include           []string
+	Exclude           []string
+	Concurrency       int
+	Async             bool
+	Refresh           bool
+	NoSummary         bool
+	MaxFileSize       int64
+	MetadataMethods   []string
+	NoMetadataMethods bool
+	IndexPlan         string
+	IndexPlanDigest   string
 }
 
 func (c IndexCommand) Name() string { return "index" }
+
+const (
+	MetadataMethodBase        = "base"
+	MetadataMethodSummary     = "summary"
+	MetadataMethodClassifyV1  = "builtin.classify.v1"
+	MetadataMethodRetrievalV1 = "builtin.retrieval.v1"
+	MetadataMethodRoutingV1   = "builtin.routing.v1"
+)
+
+func (c IndexCommand) EffectiveMetadataMethods() []string {
+	seen := map[string]bool{}
+	methods := []string{}
+	add := func(method string) {
+		if method == "" || seen[method] {
+			return
+		}
+		seen[method] = true
+		methods = append(methods, method)
+	}
+
+	add(MetadataMethodBase)
+	if c.NoMetadataMethods {
+		return methods
+	}
+	if len(c.MetadataMethods) == 0 {
+		if !c.NoSummary {
+			add(MetadataMethodSummary)
+		}
+		return methods
+	}
+	for _, method := range c.MetadataMethods {
+		if method == MetadataMethodSummary && c.NoSummary {
+			continue
+		}
+		add(method)
+	}
+	return methods
+}
+
+func (c IndexCommand) EffectiveNoSummary() bool {
+	for _, method := range c.EffectiveMetadataMethods() {
+		if method == MetadataMethodSummary {
+			return false
+		}
+	}
+	return true
+}
 
 type IndexCleanCommand struct {
 	Path   string
@@ -133,6 +191,55 @@ type IndexEvalCommand struct {
 
 func (c IndexEvalCommand) Name() string { return "index" }
 
+type IndexMethodsCommand struct {
+	Stage string
+}
+
+func (c IndexMethodsCommand) Name() string { return "index" }
+
+type IndexPlanValidateCommand struct {
+	Path string
+}
+
+func (c IndexPlanValidateCommand) Name() string { return "index" }
+
+type IndexReviewCommand struct {
+	Path   string
+	Method string
+}
+
+func (c IndexReviewCommand) Name() string { return "index" }
+
+type IndexReviewProposeCommand struct {
+	ReviewJSON string
+}
+
+func (c IndexReviewProposeCommand) Name() string { return "index" }
+
+type IndexReviewPatchCommand struct {
+	ProposalJSON string
+}
+
+func (c IndexReviewPatchCommand) Name() string { return "index" }
+
+type IndexReviewStatusCommand struct {
+	CheckpointID string
+}
+
+func (c IndexReviewStatusCommand) Name() string { return "index" }
+
+type IndexReviewAcceptCommand struct {
+	CheckpointID string
+}
+
+func (c IndexReviewAcceptCommand) Name() string { return "index" }
+
+type IndexReviewRestoreCommand struct {
+	CheckpointID string
+}
+
+func (c IndexReviewRestoreCommand) Name() string { return "index" }
+
 type IndexMapCommand struct {
 	Path string
 }
@@ -140,7 +247,14 @@ type IndexMapCommand struct {
 func (c IndexMapCommand) Name() string { return "index" }
 
 type MapCommand struct {
-	Path string
+	Path           string
+	Depth          int
+	SummaryOnly    bool
+	MaxFilesPerDir int
+	Full           bool
+	ListTags       bool
+	Tags           []string
+	RecentModified bool
 }
 
 func (c MapCommand) Name() string { return "map" }
@@ -337,10 +451,12 @@ Global flags:
 
 Commands:
   init         Create or reinitialize the local memory store layout
+  config       Set local config values such as the Gemini API key
   logs         Inspect, export, or clear aascribe logs
   output       Browse stored oversized outputs for LLM-safe continuation
   operation    Inspect persisted long-running operation state
   index        Index a folder for later retrieval and summarization
+  map          Read generated index metadata as a compact routing map
   search       Exact text search with line-level matches
   describe     Summarize one file with optional length and focus controls
   remember     Write a short-term memory item
@@ -352,46 +468,21 @@ Commands:
   show         Show one memory entry in full
   forget       Delete one memory entry
 
-Main Flows:
-  1. Initialize a store for the current workspace:
-     aascribe init
-  2. Use an explicit project-local store when needed:
-     aascribe --store ./project-mem init
-  3. Check where logs are being written:
-     aascribe logs path
-  4. Export logs for debugging:
-     aascribe logs export --output ./aascribe.log
+AI Agent Routing:
+  - First-time setup? Run aascribe init --help.
+  - Need LLM credentials? Run aascribe config --help.
+  - Need to index or improve retrieval? Run aascribe index --help.
+  - Need to inspect index metadata? Run aascribe map --help.
+  - Need exact confirmation after routing? Run aascribe search --help.
+  - Need logs or long-running operation state? Run aascribe logs --help or aascribe operation --help.
 
-Current Implementation Status:
-  Working now:
-    init
-    logs path
-    logs export
-    logs clear
-    output generate
-    output list
-    output meta
-    output show
-    output head
-    output tail
-    output slice
-    operation list
-    operation status
-    operation events
-    operation result
-    operation cancel
-    index
-    index clean
-    search
-    describe
-    chat
-    summarize
-  CLI surface exists but command execution is still being implemented:
-    remember, consolidate, recall, list, show, forget
+Implementation Notes:
+  Core store, logging, output, operation, index, map, search, describe, chat, and summarize commands are active.
+  Memory authoring commands remember, consolidate, recall, list, show, and forget still have CLI surface before full execution.
 
 How To Get More Information:
   aascribe <command> --help
-  aascribe logs --help
+  aascribe index --help
   Read docs/USAGE.md for the longer reference
   Default output is compact text for LLM reading; prefer --format json when another agent or tool will parse the result
 `)
@@ -424,6 +515,31 @@ What To Do Next:
   Run aascribe logs path to confirm the active log file
   Use aascribe --help to see the full command surface
   Read docs/USAGE.md for the longer command reference
+`)
+	case "config":
+		return strings.TrimSpace(`
+aascribe config - set local configuration values
+
+Purpose:
+  Update local store configuration needed by LLM-backed commands.
+
+Usage:
+  aascribe config gemini_api_key=<key>
+  aascribe --store ./project-mem config gemini_api_key=<key>
+
+Behavior:
+  Creates the default store and config skeleton if they do not exist.
+  The skeleton defines non-secret LLM settings: provider, model, api_key_env, timeout_seconds.
+  The Gemini API key is required for summary-backed index, has no default, and must be set by the user.
+  Writes the Gemini key to data/config/.env as GEMINI_API_KEY without echoing the secret value.
+
+Examples:
+  aascribe config gemini_api_key=xxxxxxxxxxxx
+  cat ./data/config/config.toml
+  aascribe index ./docs
+
+Next Steps:
+  Run an LLM-backed command such as aascribe index <path>, chat, describe, or summarize.
 `)
 	case "logs":
 		return strings.TrimSpace(`
@@ -709,7 +825,9 @@ Purpose:
   Prepare repository content for faster later retrieval by walking one directory tree, summarizing direct files per folder, and recording local-only index metadata.
 
 Usage:
-  aascribe index <path> [--depth <n>] [--include <glob>] [--exclude <glob>] [--refresh] [--no-summary] [--max-file-size <bytes>]
+  aascribe index <path> [--depth <n>] [--include <glob>] [--exclude <glob>] [--refresh] [--no-summary] [--metadata-method <method>] [--no-metadata-methods] [--index-plan <file>] [--max-file-size <bytes>]
+  aascribe index methods [--stage file|folder|start|end]
+  aascribe index plan validate <file>
   aascribe index dirty <path>
   aascribe index eval <path>
   aascribe index clean <path> [--dry-run] --force
@@ -718,17 +836,34 @@ Behavior:
   Treat .gitignore and .aaignore in each visited folder as blacklist exclude files during traversal.
   Detect text files from file content instead of filename extension.
   Write .aascribe_index_meta.json in each indexed folder with local-only metadata for that folder.
+  With no metadata method flags, use the default methods: base metadata plus summary.
+  Supported methods in this build are base, summary, builtin.classify.v1, builtin.retrieval.v1, builtin.routing.v1, builtin.run-context.v1, and builtin.run-report.v1. Base metadata always runs.
+  Use --index-plan to run built-in methods listed in an index-plan-v1 TOML file.
+  Use index methods to list method descriptions in text or JSON form.
+  Use index plan validate to check an index-plan-v1 TOML file without running index.
+  Use index review to improve retrieval metadata quality after indexing. Run aascribe index review --help for the checkpoint workflow.
   Use --concurrency to bound direct-file processing across the whole index run.
   Use --async to start index as an operation and inspect it later with operation status/events/result.
   Use index dirty to mark existing metadata stale so the next index run rebuilds it.
   Use index eval to preview which folders and direct files need indexing and which ones are unchanged.
   Use index clean to remove generated .aascribe_index_meta.json files recursively.
 
+AI Agent Routing:
+  - Need to preview scope? Run aascribe index eval --help.
+  - Need to choose methods or write TOML? Run aascribe index plan --help.
+  - Need valid method ids/descriptions? Run aascribe index methods --help.
+  - Retrieval metadata looks low quality? Run aascribe index review --help.
+
 Examples:
   aascribe index .
   aascribe index --depth 2 ./internal
   aascribe index --concurrency 4 ./internal
   aascribe index --async ./internal
+  aascribe index methods
+  aascribe index plan validate ./aascribe.index.toml
+  aascribe index review ./coding --method builtin.retrieval.v1
+  aascribe index --index-plan ./aascribe.index.toml ./internal
+  aascribe --format json index methods --stage file
   aascribe --store ./project-mem index --exclude vendor .
   aascribe index dirty ./internal
   aascribe index eval ./internal
@@ -736,7 +871,184 @@ Examples:
 
 Further Info:
   aascribe --help
-  Read docs/USAGE.md and docs/spec/index-spec.md for the stable index contract
+ Read docs/USAGE.md and docs/spec/index-spec.md for the stable index contract
+`)
+	case "index review":
+		return strings.TrimSpace(`
+aascribe index review - checkpointed review workflow for retrieval metadata
+
+Purpose:
+  Help AI agents improve retrieval metadata and prompt files without blind mutation.
+  The workflow is checkpoint-first: review current state, propose prompt changes, patch, verify, then accept or restore.
+
+Usage:
+  aascribe index review <path> [--method builtin.retrieval.v1]
+  aascribe index review propose <review-json>
+  aascribe index review patch <proposal-json>
+  aascribe index review status <checkpoint-id>
+  aascribe index review accept <checkpoint-id>
+  aascribe index review restore <checkpoint-id>
+
+AI Agent Workflow:
+  1. Run review to create a checkpoint and review report.
+  2. Read review_json.
+  3. If issues are prompt-level, run propose.
+  4. Read proposal_json and proposal_markdown.
+  5. If acceptable, run patch.
+  6. Re-run index with --refresh.
+  7. Re-run review.
+  8. If improved, accept the checkpoint. If worse, restore it.
+
+Agent Contract:
+  Every subcommand returns status, writes, artifacts, and next actions.
+  review writes a checkpoint and report, but does not modify metadata or prompts.
+  propose writes a proposal, but does not modify metadata or prompts.
+  patch modifies prompt files only.
+  accept closes a checkpoint.
+  restore restores checkpointed prompt and metadata files.
+
+Examples:
+  aascribe index review ./coding --method builtin.retrieval.v1
+  aascribe index review propose ./data/report/2026-05-19-retrieval-review.json
+  aascribe index review patch ./data/report/2026-05-19-retrieval-prompt-proposal.json
+  aascribe index review status index-review-20260519-abc123
+  aascribe index review accept index-review-20260519-abc123
+  aascribe index review restore index-review-20260519-abc123
+`)
+	case "index plan":
+		return strings.TrimSpace(`
+aascribe index plan - create and validate index-plan-v1 TOML files
+
+Purpose:
+  An index plan tells aascribe which index methods to enable for an index run.
+  AI agents should use plans for non-trivial indexing behavior instead of guessing many CLI flags.
+
+Agent Workflow:
+  1. Ask the user what the index should optimize for:
+     - fast local structure only
+     - agent file routing and classification
+     - LLM retrieval hints for future repo questions
+     - summary-backed repo understanding
+  2. Discover available methods:
+     aascribe --format json index methods
+  3. Use only method ids returned by that command. Do not invent method ids.
+  4. Draft an index-plan-v1 TOML file.
+  5. Validate it:
+     aascribe index plan validate ./aascribe.index.toml
+  6. Revise the plan until validation succeeds.
+  7. Run index only after validation succeeds:
+     aascribe index <path> --index-plan ./aascribe.index.toml
+
+Plan Verification Workflow For AI Agents:
+  1. Never assume a plan is valid because it matches an example.
+  2. Always run aascribe index plan validate <plan-file> after writing or editing a plan.
+  3. If validation reports an unknown method, run aascribe --format json index methods and rewrite [methods].enabled using only returned ids.
+  4. If the user wants no LLM usage, omit "summary" from [methods].enabled and validate again.
+  5. If validation rejects a custom/external method, explain that custom/external method execution is not available in this version, remove it from [methods].enabled, and validate again.
+  6. Do not run aascribe index <path> --index-plan <file> until validation succeeds.
+
+Current Plan Format:
+  version = "index-plan-v1"
+
+  [methods]
+  enabled = [
+    "builtin.classify.v1",
+    "builtin.retrieval.v1",
+    "builtin.routing.v1"
+  ]
+
+Rules:
+  - [methods].enabled is the only required section.
+  - base metadata always runs; including "base" is optional and usually unnecessary.
+  - Methods are enabled by string ids in [methods].enabled.
+  - Do not write boolean keys such as builtin_retrieval_v1 = true or summary = true.
+  - "summary" enables LLM-backed file summaries and requires configured LLM credentials.
+  - "builtin.classify.v1" performs deterministic file classification.
+  - "builtin.retrieval.v1" emits LLM-facing retrieval terms, aliases, entities, and likely queries from bounded file text.
+  - "builtin.routing.v1" aggregates folder routing metadata.
+  - "builtin.run-context.v1" records root-only start lifecycle metadata.
+  - "builtin.run-report.v1" records root-only end lifecycle aggregates.
+  - Custom/external method descriptors are future-facing and are not executable in this build.
+
+Examples:
+  Fast LLM retrieval hints without summary:
+    version = "index-plan-v1"
+
+    [methods]
+    enabled = [
+      "builtin.classify.v1",
+      "builtin.retrieval.v1",
+      "builtin.routing.v1",
+      "builtin.run-context.v1",
+      "builtin.run-report.v1"
+    ]
+
+  Summary-backed repo understanding:
+    version = "index-plan-v1"
+
+    [methods]
+    enabled = [
+      "summary",
+      "builtin.classify.v1",
+      "builtin.retrieval.v1",
+      "builtin.routing.v1"
+    ]
+
+Validation:
+  aascribe index plan validate ./aascribe.index.toml
+
+Run:
+  aascribe index . --index-plan ./aascribe.index.toml
+`)
+	case "index plan validate":
+		return strings.TrimSpace(`
+aascribe index plan validate - check an index-plan-v1 TOML file
+
+Usage:
+  aascribe index plan validate <file>
+
+Checks:
+  - version is index-plan-v1
+  - enabled method ids are known
+  - duplicate enabled ids are rejected
+  - custom ids do not conflict with built-ins
+  - custom descriptors are structurally valid
+  - custom/external method execution is still disabled in this build
+
+Agent Notes:
+  Validation is mandatory before running an index plan.
+  If validation fails, revise the plan and validate again.
+  If the error mentions an unknown method, refresh method discovery:
+    aascribe --format json index methods
+  Then rewrite the plan using only available method ids.
+  Do not run:
+    aascribe index <path> --index-plan <file>
+  until validation succeeds.
+
+Examples:
+  aascribe index plan validate ./aascribe.index.toml
+  aascribe --format json index plan validate ./aascribe.index.toml
+`)
+	case "index methods":
+		return strings.TrimSpace(`
+aascribe index methods - list available index methods
+
+Purpose:
+  Show the method ids, stages, enablement flags, purpose, descriptions, and config schema metadata that agents should use when choosing index behavior or drafting an index plan.
+
+Usage:
+  aascribe index methods [--stage file|folder|start|end]
+  aascribe --format json index methods [--stage file|folder|start|end]
+
+Agent Notes:
+  Treat the JSON output as the source of truth for valid method ids.
+  Do not invent method ids when writing [methods].enabled in an index-plan-v1 file.
+  After drafting a plan, validate it with:
+    aascribe index plan validate ./aascribe.index.toml
+
+Examples:
+  aascribe index methods
+  aascribe --format json index methods --stage file
 `)
 	case "index clean":
 		return strings.TrimSpace(`
@@ -790,20 +1102,62 @@ Purpose:
 Usage:
   aascribe index eval <path>
 
-Examples:
-  aascribe index eval ./internal
-  aascribe index eval ./tests
-
 Notes:
   This command does not write metadata.
   Folder state is local-only: child folder changes do not make the parent folder changed unless the parent's own direct files or metadata changed.
+
+Agent Notes:
+  Use eval before expensive or LLM-backed indexing.
+  If eval shows too much noise, narrow the next index run with --depth, --include, --exclude, or .aaignore.
+  If eval misses expected files, adjust include/exclude rules before writing an index plan.
+
+Examples:
+  aascribe index eval ./internal
+  aascribe index --depth 2 ./internal
+  aascribe index --include "*.go" --exclude "vendor/**" ./internal
+`)
+	case "map":
+		return strings.TrimSpace(`
+aascribe map - read generated index metadata as a compact routing map
+
+Purpose:
+  Help an agent inspect which folders are indexed, stale, missing metadata, or ready for routing before doing exact search or opening files.
+
+Usage:
+  aascribe map <path> [--depth <n>] [--summary-only] [--max-files-per-dir <n>] [--full]
+  aascribe map <path> --tag
+  aascribe map <path> --tag <tag> [--tag <tag> ...]
+  aascribe map <path> --recent-modified
+  aascribe index map <path> [same flags]
+
+Focused views:
+  Bare --tag lists available tags with file counts.
+  --tag <tag> lists related files; repeat it to require all supplied tags.
+  --recent-modified lists the 20 most recently modified files visible to the map, newest first.
+  Focused views return compact output instead of the normal hierarchy.
+
+Agent Notes:
+  Repository questions are read-only unless the caller explicitly requests indexing or refresh.
+  Use existing trustworthy metadata for broad semantic routing; otherwise use read-only filesystem discovery.
+  State reports metadata access. Trust summaries only with checked-fresh, non-partial evidence.
+  Default output is bounded (depth 2, 20 files per directory); omissions include exact continuations.
+  Use --full only when complete traversal is explicitly required.
+  Use search after map when you need exact line-level confirmation.
+
+Examples:
+  aascribe map .
+  aascribe map ./internal --depth 1 --summary-only
+  aascribe map ./internal --tag
+  aascribe map ./internal --tag docs --tag api
+  aascribe map ./internal --recent-modified
+  aascribe map ./internal --full
 `)
 	case "search":
 		return strings.TrimSpace(`
-aascribe search - exact text search with line-level matches
+aascribe search - exact text search with matching-line results
 
 Purpose:
-  Confirm exact mentions after semantic routing. This command prefers system search tools in this order: rg, git grep, grep, then a built-in fallback.
+  Search a known exact term first, or confirm candidates after semantic routing.
 
 Usage:
   aascribe search <query> [path] [--engine auto|rg|git-grep|grep|builtin] [--ignore-case] [--fixed-strings] [--glob <pattern>] [--max-count <n>]
@@ -816,7 +1170,10 @@ Examples:
 
 Notes:
   Use aascribe map for semantic routing.
-  Use aascribe search for exact confirmation, line numbers, and every occurrence within the selected scope.
+  Results represent matching lines, not individual occurrences.
+  Fixed-string auto mode tries rg, git grep, grep, then builtin with one shared scope.
+  Regex auto mode uses rg then builtin; grep and git-grep regex requests are unsupported.
+  Absence claims require complete: true, truncated: false, and an adequate declared scope.
 `)
 	case "describe":
 		return strings.TrimSpace(`
@@ -1002,7 +1359,7 @@ func HelpTopicFromArgs(args []string) (string, bool) {
 		return "root", true
 	}
 
-	tokens := make([]string, 0, 2)
+	tokens := make([]string, 0, 3)
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -1013,7 +1370,7 @@ func HelpTopicFromArgs(args []string) (string, bool) {
 		case strings.HasPrefix(arg, "--store="), strings.HasPrefix(arg, "--format="):
 		case strings.HasPrefix(arg, "-"):
 		default:
-			if len(tokens) < 2 {
+			if len(tokens) < 3 {
 				tokens = append(tokens, arg)
 			}
 		}
@@ -1043,6 +1400,18 @@ func classifyHelpTopic(tokens []string) string {
 			return "operation " + tokens[1]
 		}
 		return "operation"
+	}
+	if tokens[0] == "index" {
+		if len(tokens) > 2 && tokens[1] == "plan" && tokens[2] == "validate" {
+			return "index plan validate"
+		}
+		if len(tokens) > 1 && tokens[1] == "plan" {
+			return "index plan"
+		}
+		if len(tokens) > 1 {
+			return "index " + tokens[1]
+		}
+		return "index"
 	}
 	return tokens[0]
 }
@@ -1127,6 +1496,8 @@ func parseSubcommand(name string, args []string) (Command, error) {
 	switch name {
 	case "init":
 		return parseInit(args)
+	case "config":
+		return parseConfig(args)
 	case "logs":
 		return parseLogs(args)
 	case "output":
@@ -1160,6 +1531,21 @@ func parseSubcommand(name string, args []string) (Command, error) {
 	default:
 		return nil, newUnknownCommandError(name)
 	}
+}
+
+func parseConfig(args []string) (Command, error) {
+	if len(args) != 1 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "config", "assignment", "config requires exactly one assignment, such as gemini_api_key=...")
+	}
+	key, value, ok := strings.Cut(args[0], "=")
+	if !ok || strings.TrimSpace(key) == "" || value == "" {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "config", "assignment", "Invalid config assignment: %s.", args[0])
+	}
+	key = strings.TrimSpace(key)
+	if key != "gemini_api_key" {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "config", "assignment", "Unsupported config key: %s.", key)
+	}
+	return ConfigSetCommand{Key: key, Value: value}, nil
 }
 
 func parseLogs(args []string) (Command, error) {
@@ -1383,6 +1769,15 @@ func parseIndex(args []string) (Command, error) {
 	if len(args) > 0 && args[0] == "eval" {
 		return parseIndexEval(args[1:])
 	}
+	if len(args) > 0 && args[0] == "methods" {
+		return parseIndexMethods(args[1:])
+	}
+	if len(args) > 0 && args[0] == "plan" {
+		return parseIndexPlan(args[1:])
+	}
+	if len(args) > 0 && args[0] == "review" {
+		return parseIndexReview(args[1:])
+	}
 	if len(args) > 0 && args[0] == "map" {
 		return parseMap(args[1:])
 	}
@@ -1393,13 +1788,17 @@ func parseIndex(args []string) (Command, error) {
 	cmd.MaxFileSize = 1_048_576
 	var include stringSlice
 	var exclude stringSlice
+	var metadataMethods stringSlice
 	fs.IntVar(&cmd.Depth, "depth", 3, "")
 	fs.Var(&include, "include", "")
 	fs.Var(&exclude, "exclude", "")
+	fs.Var(&metadataMethods, "metadata-method", "")
 	fs.IntVar(&cmd.Concurrency, "concurrency", 4, "")
 	fs.BoolVar(&cmd.Async, "async", false, "")
 	fs.BoolVar(&cmd.Refresh, "refresh", false, "")
 	fs.BoolVar(&cmd.NoSummary, "no-summary", false, "")
+	fs.BoolVar(&cmd.NoMetadataMethods, "no-metadata-methods", false, "")
+	fs.StringVar(&cmd.IndexPlan, "index-plan", "", "")
 	fs.Int64Var(&cmd.MaxFileSize, "max-file-size", 1_048_576, "")
 	if err := parseFlags(fs, args); err != nil {
 		return nil, err
@@ -1410,9 +1809,24 @@ func parseIndex(args []string) (Command, error) {
 	if cmd.Concurrency <= 0 {
 		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--concurrency", "Invalid value for --concurrency: %d.", cmd.Concurrency)
 	}
+	if cmd.NoMetadataMethods && len(metadataMethods) > 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--metadata-method", "--metadata-method cannot be used with --no-metadata-methods.")
+	}
+	if cmd.IndexPlan != "" && len(metadataMethods) > 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--index-plan", "--index-plan cannot be used with --metadata-method.")
+	}
+	if cmd.IndexPlan != "" && cmd.NoMetadataMethods {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--index-plan", "--index-plan cannot be used with --no-metadata-methods.")
+	}
+	for _, method := range metadataMethods {
+		if !oneOf(method, MetadataMethodBase, MetadataMethodSummary, MetadataMethodClassifyV1, MetadataMethodRetrievalV1, MetadataMethodRoutingV1) {
+			return nil, newParseError(ParseErrorInvalidFlagValue, "index", "--metadata-method", "Unsupported metadata method: %s.", method)
+		}
+	}
 	cmd.Path = fs.Args()[0]
 	cmd.Include = include
 	cmd.Exclude = exclude
+	cmd.MetadataMethods = metadataMethods
 	return cmd, nil
 }
 
@@ -1430,6 +1844,83 @@ func parseOperationRunIndex(args []string) (Command, error) {
 		OperationID: args[0],
 		Index:       indexCmd,
 	}, nil
+}
+
+func parseIndexMethods(args []string) (Command, error) {
+	fs := newFlagSet("index methods")
+	var cmd IndexMethodsCommand
+	fs.StringVar(&cmd.Stage, "stage", "", "")
+	if err := parseFlags(fs, args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 0 {
+		return nil, newParseError(ParseErrorDoesNotAcceptArgs, "index methods", "", "index methods does not accept positional arguments.")
+	}
+	if cmd.Stage != "" && !oneOf(cmd.Stage, "file", "folder", "start", "end") {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "index methods", "--stage", "Invalid value for --stage: %s.", cmd.Stage)
+	}
+	return cmd, nil
+}
+
+func parseIndexPlan(args []string) (Command, error) {
+	if len(args) == 0 || args[0] != "validate" {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "index plan", "subcommand", "index plan requires a subcommand: validate.")
+	}
+	fs := newFlagSet("index plan validate")
+	if err := parseFlags(fs, args[1:]); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 1 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "index plan validate", "path", "index plan validate requires exactly one plan path.")
+	}
+	return IndexPlanValidateCommand{Path: fs.Args()[0]}, nil
+}
+
+func parseIndexReview(args []string) (Command, error) {
+	if len(args) == 0 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "index review", "path-or-subcommand", "index review requires a path or subcommand: propose, patch, status, accept, restore.")
+	}
+	switch args[0] {
+	case "propose":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index review propose", "review-json", "index review propose requires exactly one review JSON path.")
+		}
+		return IndexReviewProposeCommand{ReviewJSON: args[1]}, nil
+	case "patch":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index review patch", "proposal-json", "index review patch requires exactly one proposal JSON path.")
+		}
+		return IndexReviewPatchCommand{ProposalJSON: args[1]}, nil
+	case "status":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index review status", "checkpoint-id", "index review status requires exactly one checkpoint id.")
+		}
+		return IndexReviewStatusCommand{CheckpointID: args[1]}, nil
+	case "accept":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index review accept", "checkpoint-id", "index review accept requires exactly one checkpoint id.")
+		}
+		return IndexReviewAcceptCommand{CheckpointID: args[1]}, nil
+	case "restore":
+		if len(args[1:]) != 1 {
+			return nil, newParseError(ParseErrorMissingRequiredArg, "index review restore", "checkpoint-id", "index review restore requires exactly one checkpoint id.")
+		}
+		return IndexReviewRestoreCommand{CheckpointID: args[1]}, nil
+	}
+	fs := newFlagSet("index review")
+	cmd := IndexReviewCommand{Method: MetadataMethodRetrievalV1}
+	fs.StringVar(&cmd.Method, "method", MetadataMethodRetrievalV1, "")
+	if err := parseFlags(fs, args); err != nil {
+		return nil, err
+	}
+	if len(fs.Args()) != 1 {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "index review", "path", "index review requires exactly one path argument.")
+	}
+	if cmd.Method == "" {
+		return nil, newParseError(ParseErrorMissingRequiredFlag, "index review", "--method", "index review requires a non-empty --method value.")
+	}
+	cmd.Path = fs.Args()[0]
+	return cmd, nil
 }
 
 func parseIndexMap(args []string) (Command, error) {
@@ -1464,15 +1955,52 @@ func parseIndexEval(args []string) (Command, error) {
 
 func parseMap(args []string) (Command, error) {
 	fs := newFlagSet("index map")
-	var cmd MapCommand
-	if err := parseFlags(fs, args); err != nil {
+	cmd := MapCommand{Depth: 2, MaxFilesPerDir: 20}
+	var tags stringSlice
+	fs.IntVar(&cmd.Depth, "depth", 2, "")
+	fs.BoolVar(&cmd.SummaryOnly, "summary-only", false, "")
+	fs.IntVar(&cmd.MaxFilesPerDir, "max-files-per-dir", 20, "")
+	fs.BoolVar(&cmd.Full, "full", false, "")
+	fs.BoolVar(&cmd.ListTags, "tag-list", false, "")
+	fs.Var(&tags, "tag", "")
+	fs.BoolVar(&cmd.RecentModified, "recent-modified", false, "")
+	if err := parseFlags(fs, normalizeMapTagArgs(args)); err != nil {
 		return nil, err
 	}
+	cmd.Tags = tags
 	if len(fs.Args()) != 1 {
 		return nil, newParseError(ParseErrorMissingRequiredArg, "map", "path", "map requires exactly one path argument.")
 	}
+	if cmd.Depth < 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "map", "--depth", "Invalid value for --depth: %d.", cmd.Depth)
+	}
+	if cmd.MaxFilesPerDir < 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "map", "--max-files-per-dir", "Invalid value for --max-files-per-dir: %d.", cmd.MaxFilesPerDir)
+	}
+	if cmd.ListTags && len(cmd.Tags) > 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "map", "--tag", "Use bare --tag to list tags or --tag <tag> to find files, not both.")
+	}
+	if cmd.RecentModified && (cmd.ListTags || len(cmd.Tags) > 0) {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "map", "--recent-modified", "--recent-modified cannot be combined with --tag.")
+	}
+	if (cmd.ListTags || len(cmd.Tags) > 0 || cmd.RecentModified) && (cmd.Depth != 2 || cmd.SummaryOnly || cmd.MaxFilesPerDir != 20 || cmd.Full) {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "map", "projection flags", "--depth, --summary-only, --max-files-per-dir, and --full cannot be combined with --tag or --recent-modified.")
+	}
 	cmd.Path = fs.Args()[0]
 	return cmd, nil
+}
+
+func normalizeMapTagArgs(args []string) []string {
+	normalized := append([]string(nil), args...)
+	for i, arg := range normalized {
+		if arg != "--tag" && arg != "-tag" {
+			continue
+		}
+		if i+1 == len(normalized) || strings.HasPrefix(normalized[i+1], "-") {
+			normalized[i] = "--tag-list"
+		}
+	}
+	return normalized
 }
 
 func parseSearch(args []string) (Command, error) {
@@ -1500,7 +2028,13 @@ func parseSearch(args []string) (Command, error) {
 	if cmd.MaxCount < 0 {
 		return nil, newParseError(ParseErrorInvalidFlagValue, "search", "--max-count", "Invalid value for --max-count: %d.", cmd.MaxCount)
 	}
+	if !cmd.FixedStrings && (cmd.Engine == "grep" || cmd.Engine == "git-grep") {
+		return nil, newUnsupportedQueryError("search", "--engine", "Regex mode is unsupported by engine %s; use rg, builtin, auto, or --fixed-strings.", cmd.Engine)
+	}
 	cmd.Query = positionals[0]
+	if cmd.Query == "" {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "search", "query", "search query must not be empty.")
+	}
 	if len(positionals) == 2 {
 		cmd.Path = positionals[1]
 	}

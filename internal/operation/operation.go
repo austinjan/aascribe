@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/austinjan/aascribe/internal/apperr"
-	"github.com/austinjan/aascribe/pkg/llmoutput"
+	"github.com/austinjan/agentcli-core/largeoutput"
 )
 
 type State string
@@ -607,6 +607,24 @@ func resultPath(storePath, id string) string {
 	return filepath.Join(operationDir(storePath, id), "result.json")
 }
 
+func SnapshotFile(storePath, id, sourcePath, filename string) (string, error) {
+	if strings.TrimSpace(filename) == "" {
+		return "", apperr.InvalidArguments("operation snapshot filename is required.")
+	}
+	if err := ensureOperationExists(storePath, id); err != nil {
+		return "", err
+	}
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return "", apperr.IOError("Failed to read operation snapshot source: %s.", sourcePath)
+	}
+	target := filepath.Join(operationDir(storePath, id), filename)
+	if err := os.WriteFile(target, content, 0o644); err != nil {
+		return "", apperr.IOError("Failed to write operation snapshot: %s.", target)
+	}
+	return target, nil
+}
+
 func ensureOperationExists(storePath, id string) error {
 	if _, err := os.Stat(statusPath(storePath, id)); err != nil {
 		if os.IsNotExist(err) {
@@ -672,17 +690,17 @@ func prepareResultForStorage(storePath string, result *Result) (*Result, error) 
 	if err != nil {
 		return nil, apperr.Serialization("Failed to serialize operation result data.")
 	}
-	delivered, err := llmoutput.Deliver(storePath, "operation result", string(dataJSON), llmoutput.DefaultConfig())
+	delivered, err := largeoutput.Deliver(storePath, "operation result", string(dataJSON), largeoutput.DeliverOptions{Config: largeoutput.DefaultConfig()})
 	if err != nil {
 		return nil, err
 	}
-	if !delivered.Hint.Truncated {
+	if !delivered.Continuation.Truncated {
 		return result, nil
 	}
 
 	trimmed := *result
 	trimmed.Data = nil
-	trimmed.OutputID = delivered.Hint.OutputID
+	trimmed.OutputID = delivered.Continuation.OutputID
 	trimmed.Truncated = true
 	return &trimmed, nil
 }

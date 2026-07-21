@@ -125,6 +125,363 @@ func TestBuildNoSummaryOmitsSummaryFields(t *testing.T) {
 	}
 }
 
+func TestBuildWritesClassifyAndRoutingMethods(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "main.go"), "package main\n")
+	mustWriteFile(t, filepath.Join(root, "README.md"), "# Demo\n")
+
+	result, err := Build(Options{
+		Root:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1, MethodRoutingV1},
+	})
+	if err != nil {
+		t.Fatalf("expected build success, got %v", err)
+	}
+	if result.Run == nil || result.Run.MethodStatusCounts[MethodClassifyV1+":ok"] != 2 || result.Run.MethodStatusCounts[MethodRoutingV1+":ok"] != 1 {
+		t.Fatalf("expected method report counts, got %#v", result.Run)
+	}
+
+	meta := readMetadataFile(t, root)
+	if len(meta.Files) != 2 {
+		t.Fatalf("expected two metadata files, got %#v", meta.Files)
+	}
+	categories := map[string]bool{}
+	for _, file := range meta.Files {
+		output, ok := file.Methods[MethodClassifyV1]
+		if !ok {
+			t.Fatalf("expected classify method on file metadata, got %#v", file)
+		}
+		if output.Stage != MethodStageFile || output.Status != MethodStatusOK || output.InputHash == "" {
+			t.Fatalf("unexpected classify output: %#v", output)
+		}
+		category, _ := output.Fields["category"].(string)
+		categories[category] = true
+	}
+	if !categories["source"] || !categories["docs"] {
+		t.Fatalf("expected source and docs categories, got %#v", categories)
+	}
+	routing, ok := meta.Methods[MethodRoutingV1]
+	if !ok {
+		t.Fatalf("expected routing method on folder metadata, got %#v", meta.Methods)
+	}
+	if routing.Stage != MethodStageFolder || routing.Status != MethodStatusOK || routing.InputHash == "" {
+		t.Fatalf("unexpected routing output: %#v", routing)
+	}
+	counts := intMapField(routing.Fields["category_counts"])
+	if counts["source"] != 1 || counts["docs"] != 1 {
+		t.Fatalf("expected routing category counts, got %#v", routing.Fields)
+	}
+}
+
+func TestBuildWritesLifecycleRunMethodsOnlyAtRoot(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "main.go"), "package main\n")
+	mustWriteFile(t, filepath.Join(root, "nested", "README.md"), "# Nested\n")
+
+	baseline, err := Build(Options{
+		Root:            root,
+		Depth:           2,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1},
+	})
+	if err != nil {
+		t.Fatalf("expected baseline build success, got %v", err)
+	}
+	if baseline.Run == nil || baseline.Run.MethodStatusCounts[MethodClassifyV1+":ok"] != 2 {
+		t.Fatalf("expected baseline classify counts, got %#v", baseline.Run)
+	}
+	baselineMeta := readMetadataFile(t, root)
+	baselineHash := baselineMeta.Files[0].Methods[MethodClassifyV1].InputHash
+
+	result, err := Build(Options{
+		Root:            root,
+		Depth:           2,
+		Refresh:         true,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1, MethodRunContextV1, MethodRunReportV1},
+		IndexPlanPath:   filepath.Join(root, "aascribe.index.toml"),
+		IndexPlanDigest: "sha256:test",
+	})
+	if err != nil {
+		t.Fatalf("expected lifecycle build success, got %v", err)
+	}
+	if result.Run == nil || result.Run.MethodStatusCounts[MethodRunContextV1+":ok"] != 1 || result.Run.MethodStatusCounts[MethodRunReportV1+":ok"] != 1 {
+		t.Fatalf("expected lifecycle method counts, got %#v", result.Run)
+	}
+
+	meta := readMetadataFile(t, root)
+	if len(meta.RunMethods) != 2 {
+		t.Fatalf("expected root run methods, got %#v", meta.RunMethods)
+	}
+	start := meta.RunMethods[MethodRunContextV1]
+	if start.Stage != MethodStageStart || start.Status != MethodStatusOK || start.InputHash == "" {
+		t.Fatalf("unexpected start lifecycle output: %#v", start)
+	}
+	end := meta.RunMethods[MethodRunReportV1]
+	if end.Stage != MethodStageEnd || end.Status != MethodStatusOK || end.InputHash == "" {
+		t.Fatalf("unexpected end lifecycle output: %#v", end)
+	}
+	if got, _ := end.Fields["metadata_files"].(float64); got != 2 {
+		t.Fatalf("expected end lifecycle metadata_files aggregate, got %#v", end.Fields)
+	}
+	if got := meta.Files[0].Methods[MethodClassifyV1].InputHash; got != baselineHash {
+		t.Fatalf("expected lifecycle methods not to mutate file method input hash: baseline=%s got=%s", baselineHash, got)
+	}
+
+	childMeta := readMetadataFile(t, filepath.Join(root, "nested"))
+	if len(childMeta.RunMethods) != 0 {
+		t.Fatalf("expected lifecycle run_methods only at root, got %#v", childMeta.RunMethods)
+	}
+}
+
+func TestBuildWritesRetrievalMethod(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "docs", "tools.md"), `# Tools
+
+- **starship** - Cross-shell prompt
+- **xh** - HTTP client
+- **zoxide** - Smarter cd command
+- [claude-code/](claude-code/) - Agent setup docs
+
+Example: fd "*.txt" - find text files
+
+Install Zed on WSL.
+`)
+
+	result, err := Build(Options{
+		Root:            root,
+		Depth:           2,
+		NoSummary:       true,
+		MaxFileSize:     4096,
+		MetadataMethods: []string{MethodBase, MethodRetrievalV1},
+	})
+	if err != nil {
+		t.Fatalf("expected build success, got %v", err)
+	}
+	if result.Run == nil || result.Run.MethodStatusCounts[MethodRetrievalV1+":ok"] != 1 {
+		t.Fatalf("expected retrieval method count, got %#v", result.Run)
+	}
+
+	meta := readMetadataFile(t, filepath.Join(root, "docs"))
+	if len(meta.Files) != 1 {
+		t.Fatalf("expected one metadata file, got %#v", meta.Files)
+	}
+	output, ok := meta.Files[0].Methods[MethodRetrievalV1]
+	if !ok {
+		t.Fatalf("expected retrieval method on file metadata, got %#v", meta.Files[0])
+	}
+	terms := stringSliceField(output.Fields["retrieval_terms"])
+	for _, want := range []string{"HTTP client", "shell prompt", "Smarter cd command", "Windows Subsystem for Linux"} {
+		if !containsString(terms, want) {
+			t.Fatalf("expected retrieval term %q in %#v", want, terms)
+		}
+	}
+	fieldsJSON, err := json.Marshal(output.Fields)
+	if err != nil {
+		t.Fatalf("marshal retrieval fields: %v", err)
+	}
+	fieldsText := string(fieldsJSON)
+	for _, want := range []string{`"from":"WSL"`, `"to":"Windows Subsystem for Linux"`, `"name":"starship"`, `"name":"xh"`, `"role":"HTTP client"`, `"install zed in wsl"`, `"which tool handles HTTP client"`} {
+		if !strings.Contains(fieldsText, want) {
+			t.Fatalf("expected retrieval fields to contain %q, got %s", want, fieldsText)
+		}
+	}
+	for _, unwanted := range []string{`Example`, `fd "*.txt"`, `[claude-code/](claude-code/`, `"from":"Example"`} {
+		if strings.Contains(fieldsText, unwanted) {
+			t.Fatalf("expected retrieval fields to exclude %q, got %s", unwanted, fieldsText)
+		}
+	}
+}
+
+func TestBuildSelectedMethodPreventsOldMetadataReuse(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "main.go"), "package main\n")
+
+	_, err := Build(Options{
+		Root:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase},
+	})
+	if err != nil {
+		t.Fatalf("expected first build success, got %v", err)
+	}
+	meta := readMetadataFile(t, root)
+	if len(meta.Files) != 1 || meta.Files[0].Methods != nil {
+		t.Fatalf("expected base-only metadata without method envelope, got %#v", meta.Files)
+	}
+
+	_, err = Build(Options{
+		Root:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1},
+	})
+	if err != nil {
+		t.Fatalf("expected second build success, got %v", err)
+	}
+	meta = readMetadataFile(t, root)
+	if _, ok := meta.Files[0].Methods[MethodClassifyV1]; !ok {
+		t.Fatalf("expected classify method after selected-method rebuild, got %#v", meta.Files[0])
+	}
+}
+
+func TestBuildReusesSelectedMethodMetadata(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "main.go"), "package main\n")
+
+	_, err := Build(Options{
+		Root:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1},
+	})
+	if err != nil {
+		t.Fatalf("expected first build success, got %v", err)
+	}
+
+	result, err := Build(Options{
+		Root:            root,
+		Depth:           1,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1},
+	})
+	if err != nil {
+		t.Fatalf("expected second build success, got %v", err)
+	}
+	if result.Run == nil || result.Run.UnchangedSkippedFiles != 1 || result.Run.MethodStatusCounts[MethodClassifyV1+":ok"] != 1 {
+		t.Fatalf("expected selected method metadata reuse, got %#v", result.Run)
+	}
+}
+
+func TestValidateIndexPlanFile(t *testing.T) {
+	root := t.TempDir()
+	planPath := filepath.Join(root, "aascribe.index.toml")
+	mustWriteFile(t, planPath, `
+version = "index-plan-v1"
+
+[methods]
+enabled = ["builtin.classify.v1", "builtin.routing.v1"]
+`)
+
+	validation, err := ValidateIndexPlanFile(planPath)
+	if err != nil {
+		t.Fatalf("expected valid plan, got %v", err)
+	}
+	if validation.Path != planPath || validation.Digest == "" {
+		t.Fatalf("unexpected validation result: %#v", validation)
+	}
+	if len(validation.Plan.Methods.Enabled) != 2 {
+		t.Fatalf("expected enabled methods, got %#v", validation.Plan.Methods.Enabled)
+	}
+}
+
+func TestValidateIndexPlanAcceptsLifecycleMethods(t *testing.T) {
+	root := t.TempDir()
+	planPath := filepath.Join(root, "aascribe.index.toml")
+	mustWriteFile(t, planPath, `
+version = "index-plan-v1"
+
+[methods]
+enabled = ["builtin.run-context.v1", "builtin.run-report.v1"]
+`)
+
+	validation, err := ValidateIndexPlanFile(planPath)
+	if err != nil {
+		t.Fatalf("expected valid lifecycle plan, got %v", err)
+	}
+	if len(validation.Plan.Methods.Enabled) != 2 {
+		t.Fatalf("expected lifecycle methods, got %#v", validation.Plan.Methods.Enabled)
+	}
+}
+
+func TestValidateIndexPlanRejectsInvalidInputs(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "version",
+			body: `version = "nope"
+[methods]
+enabled = ["builtin.classify.v1"]
+`,
+			want: "Unsupported index plan version",
+		},
+		{
+			name: "unknown method",
+			body: `version = "index-plan-v1"
+[methods]
+enabled = ["missing.v1"]
+`,
+			want: "Unknown index method",
+		},
+		{
+			name: "duplicate enabled",
+			body: `version = "index-plan-v1"
+[methods]
+enabled = ["builtin.classify.v1", "builtin.classify.v1"]
+`,
+			want: "Duplicate enabled index method",
+		},
+		{
+			name: "duplicate custom",
+			body: `version = "index-plan-v1"
+[methods]
+enabled = []
+
+[[methods.custom]]
+id = "custom.security.v1"
+stage = "file"
+scope = "file"
+command = ["./security"]
+
+[[methods.custom]]
+id = "custom.security.v1"
+stage = "file"
+scope = "file"
+command = ["./security"]
+`,
+			want: "Duplicate custom index method id",
+		},
+		{
+			name: "enabled custom blocked",
+			body: `version = "index-plan-v1"
+[methods]
+enabled = ["custom.security.v1"]
+
+[[methods.custom]]
+id = "custom.security.v1"
+stage = "file"
+scope = "file"
+command = ["./security"]
+`,
+			want: "Custom index method execution is not available in v2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			planPath := filepath.Join(root, "aascribe.index.toml")
+			mustWriteFile(t, planPath, tt.body)
+			_, err := ValidateIndexPlanFile(planPath)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q error, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
 func TestBuildReadsGitignoreAndAaignoreAsBlacklist(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, ".gitignore"), "ignored.txt\nbuild/\n")
@@ -232,10 +589,55 @@ func TestBuildMetadataTracksNoSummaryAndSizeLimits(t *testing.T) {
 	if len(meta.NotIndexedFiles) != 2 {
 		t.Fatalf("expected both files to be marked not indexed in no-summary mode, got %#v", meta.NotIndexedFiles)
 	}
+	for _, file := range meta.Files {
+		if file.Summary != "" || file.SummarizedAt != "" {
+			t.Fatalf("expected no summary fields in no-summary metadata, got %#v", file)
+		}
+	}
 	for _, entry := range meta.NotIndexedFiles {
 		if entry.Reason != "no_summary_mode" {
 			t.Fatalf("expected no_summary_mode reason, got %#v", entry)
 		}
+	}
+}
+
+func TestBuildRegeneratesSummaryAfterNoSummaryMetadata(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "notes.txt"), "hello world\n")
+
+	_, err := Build(Options{
+		Root:        root,
+		Depth:       1,
+		NoSummary:   true,
+		MaxFileSize: 1024,
+	})
+	if err != nil {
+		t.Fatalf("expected no-summary build success, got %v", err)
+	}
+
+	calls := 0
+	result, err := Build(Options{
+		Root:        root,
+		Depth:       1,
+		MaxFileSize: 1024,
+		Summarizer: func(ctx context.Context, path, content, length, focus string) (string, error) {
+			calls++
+			return "fresh summary", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected summary build success, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected summary to regenerate after no-summary metadata, got %d calls", calls)
+	}
+	if len(result.Tree.Children) != 1 || result.Tree.Children[0].Summary != "fresh summary" {
+		t.Fatalf("expected regenerated summary in tree, got %#v", result.Tree.Children)
+	}
+
+	meta := readMetadataFile(t, root)
+	if len(meta.Files) != 1 || meta.Files[0].Status != "ok" || meta.Files[0].Summary != "fresh summary" {
+		t.Fatalf("expected regenerated summary metadata, got %#v", meta.Files)
 	}
 }
 
@@ -411,7 +813,7 @@ func TestBuildReusesUnchangedFileMetadata(t *testing.T) {
 	}
 
 	calls = 0
-	_, err = Build(Options{
+	result, err := Build(Options{
 		Root:        root,
 		Depth:       1,
 		MaxFileSize: 1024,
@@ -425,6 +827,9 @@ func TestBuildReusesUnchangedFileMetadata(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("expected unchanged file to reuse metadata without summarizer call, got %d", calls)
+	}
+	if result.Run == nil || result.Run.TotalDiscoveredFiles != 1 || result.Run.UnchangedSkippedFiles != 1 || result.Run.SummarizedFiles != 0 {
+		t.Fatalf("expected unchanged reuse stats, got %#v", result.Run)
 	}
 
 	meta := readMetadataFile(t, root)
@@ -1140,6 +1545,68 @@ func TestBuildFixtureIteratesThreeLevelsAndRespectsDepth(t *testing.T) {
 	}
 }
 
+func TestBuildTreatsSymlinkToDirectoryAsDirectory(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, ".agents", "skills", "adapt")
+	mustWriteFile(t, filepath.Join(targetDir, "SKILL.md"), "# Adapt\n\nSkill text.\n")
+	linkParent := filepath.Join(root, ".claude", "skills")
+	if err := os.MkdirAll(linkParent, 0o755); err != nil {
+		t.Fatalf("failed to create link parent: %v", err)
+	}
+	if err := os.Symlink(filepath.Join("..", "..", ".agents", "skills", "adapt"), filepath.Join(linkParent, "adapt")); err != nil {
+		t.Skipf("symlink not available: %v", err)
+	}
+
+	result, err := Build(Options{
+		Root:      root,
+		Depth:     8,
+		NoSummary: true,
+	})
+	if err != nil {
+		t.Fatalf("expected build success, got %v", err)
+	}
+
+	claude := requireChildByBase(t, result.Tree, ".claude")
+	skills := requireChildByBase(t, claude, "skills")
+	if !hasChildBase(skills, "adapt") {
+		meta := readMetadataFile(t, filepath.Join(root, ".claude", "skills"))
+		t.Fatalf("expected child adapt in %#v; metadata failures=%#v", skills.Children, meta.FailedFiles)
+	}
+	adapt := requireChildByBase(t, skills, "adapt")
+	if adapt.Type != "dir" {
+		t.Fatalf("expected symlink target to be indexed as directory, got %#v", adapt)
+	}
+	if !hasChildBase(adapt, "SKILL.md") {
+		t.Fatalf("expected symlink directory contents to be indexed, got %#v", adapt.Children)
+	}
+
+	meta := readMetadataFile(t, filepath.Join(root, ".claude", "skills"))
+	if len(meta.FailedFiles) != 0 {
+		t.Fatalf("expected no failed files for symlink directories, got %#v", meta.FailedFiles)
+	}
+}
+
+func TestBuildIgnoresMetadataTempArtifacts(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "notes.txt"), "hello\n")
+	mustWriteFile(t, filepath.Join(root, metadataFilename+".12345.tmp"), "partial metadata\n")
+
+	result, err := Build(Options{
+		Root:      root,
+		NoSummary: true,
+	})
+	if err != nil {
+		t.Fatalf("expected build success, got %v", err)
+	}
+	if hasChildBase(result.Tree, metadataFilename+".12345.tmp") {
+		t.Fatalf("expected metadata temp file to be ignored, got %#v", result.Tree.Children)
+	}
+	meta := readMetadataFile(t, root)
+	if len(meta.FailedFiles) != 0 {
+		t.Fatalf("expected no failed files for metadata temp artifact, got %#v", meta.FailedFiles)
+	}
+}
+
 func TestBuildWritesMetadataPerFolder(t *testing.T) {
 	root := copyFixtureTree(t)
 
@@ -1369,6 +1836,15 @@ func requireChildByBase(t *testing.T, node IndexedPathNode, base string) Indexed
 func hasChildBase(node IndexedPathNode, base string) bool {
 	for _, child := range node.Children {
 		if filepath.Base(child.Path) == base {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
 			return true
 		}
 	}

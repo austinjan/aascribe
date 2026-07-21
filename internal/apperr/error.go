@@ -30,6 +30,10 @@ func InvalidArguments(message string, args ...any) *Error {
 	return newError("INVALID_ARGUMENTS", ExitInvalidArguments, message, args...)
 }
 
+func UnsupportedQuery(message string, args ...any) *Error {
+	return newError("UNSUPPORTED_QUERY", ExitInvalidArguments, message, args...)
+}
+
 func WorkingDirectoryUnavailable() *Error {
 	return newError("WORKING_DIRECTORY_UNAVAILABLE", ExitGeneralRuntimeError, "Could not determine the current working directory for the default store path.")
 }

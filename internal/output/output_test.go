@@ -138,6 +138,57 @@ func TestWriteErrorJSONTailorsUnknownSubcommandGuidance(t *testing.T) {
 	}
 }
 
+func TestWriteErrorMissingSecretPointsToConfigCommand(t *testing.T) {
+	var out bytes.Buffer
+	err := WriteError(&out, cli.FormatJSON, false, apperr.MissingSecret("GEMINI_API_KEY"), "index", time.Now(), "./data/memory")
+	if err != nil {
+		t.Fatalf("write error: %v", err)
+	}
+	var payload struct {
+		Error struct {
+			Hint     string   `json:"hint"`
+			Examples []string `json:"examples"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal json: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(payload.Error.Hint, "API key") {
+		t.Fatalf("expected API key hint, got %q", payload.Error.Hint)
+	}
+	rendered := strings.Join(payload.Error.Examples, "\n")
+	if !strings.Contains(rendered, "aascribe config gemini_api_key=your-real-key") {
+		t.Fatalf("expected config command example, got %#v", payload.Error.Examples)
+	}
+	if strings.Contains(rendered, "aascribe chat") {
+		t.Fatalf("did not expect chat smoke example in setup guidance, got %#v", payload.Error.Examples)
+	}
+}
+
+func TestWriteErrorInvalidConfigShowsRequiredFields(t *testing.T) {
+	var out bytes.Buffer
+	err := WriteError(&out, cli.FormatJSON, false, apperr.InvalidConfig("./data/config/config.toml", "missing llm.model"), "index", time.Now(), "./data/memory")
+	if err != nil {
+		t.Fatalf("write error: %v", err)
+	}
+	var payload struct {
+		Error struct {
+			Hint     string   `json:"hint"`
+			Examples []string `json:"examples"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal json: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(payload.Error.Hint, "provider") || !strings.Contains(payload.Error.Hint, "model") {
+		t.Fatalf("expected required llm fields in hint, got %q", payload.Error.Hint)
+	}
+	rendered := strings.Join(payload.Error.Examples, "\n")
+	if !strings.Contains(rendered, "model = \"gemini-2.5-flash\"") {
+		t.Fatalf("expected concrete model fix example, got %#v", payload.Error.Examples)
+	}
+}
+
 func TestWriteErrorJSONSuggestsClosestCommandForTypo(t *testing.T) {
 	var out bytes.Buffer
 

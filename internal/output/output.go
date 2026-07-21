@@ -2,6 +2,7 @@ package output
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -9,13 +10,14 @@ import (
 
 	"github.com/austinjan/aascribe/internal/apperr"
 	"github.com/austinjan/aascribe/internal/cli"
-	"github.com/austinjan/aascribe/pkg/llmoutput"
+	"github.com/austinjan/agentcli-core/largeoutput"
 )
 
 type CommandResult struct {
-	Data           any
-	Text           string
-	PrimaryTextKey string
+	Data              any
+	Text              string
+	PrimaryTextKey    string
+	JSONTransportText string
 }
 
 type Meta struct {
@@ -59,12 +61,17 @@ func WriteSuccess(w io.Writer, format cli.Format, quiet bool, result *CommandRes
 	payloadData := result.Data
 	textOut := result.Text
 	if result.PrimaryTextKey != "" && meta.Store != "" {
-		delivered, err := llmoutput.Deliver(meta.Store, meta.Command, result.Text, llmoutput.DefaultConfig())
+		cfg := largeoutput.DefaultConfig()
+		transportText := result.Text
+		if format == cli.FormatJSON && result.JSONTransportText != "" {
+			transportText = result.JSONTransportText
+		}
+		delivered, err := largeoutput.Deliver(meta.Store, meta.Command, transportText, largeoutput.DeliverOptions{Config: cfg})
 		if err != nil {
 			return err
 		}
-		textOut = renderDeliveredText(delivered)
-		payloadData = decorateData(result.Data, result.PrimaryTextKey, delivered)
+		textOut = renderDeliveredText(delivered, cfg)
+		payloadData = decorateData(result.Data, result.PrimaryTextKey, delivered, cfg)
 	}
 
 	switch format {
@@ -374,24 +381,23 @@ func errorGuidance(err error, appErr *apperr.Error, command, store string) (stri
 			"aascribe --store ./project-mem list",
 		}
 	case "CONFIG_NOT_FOUND":
-		return "Run `aascribe init` to create data/config/config.toml before calling the LLM-backed command.", []string{
-			"aascribe init",
+		return "Create the config skeleton, then set the required Gemini API key. The key has no default.", []string{
+			"aascribe config gemini_api_key=your-real-key",
 			"cat ./data/config/config.toml",
-			"aascribe chat \"Say hello\"",
+			"aascribe index <path>",
 		}
 	case "INVALID_CONFIG":
-		return "Check the [llm] section in data/config/config.toml and fix the missing or unsupported fields.", []string{
+		return "Fix data/config/config.toml. LLM-backed commands require [llm] provider = \"gemini\", model, api_key_env, and a positive timeout_seconds.", []string{
 			"cat ./data/config/config.toml",
-			"aascribe chat --help",
-			"aascribe --help",
+			"set missing fields such as: model = \"gemini-2.5-flash\"",
+			"aascribe config gemini_api_key=your-real-key",
 		}
 	case "MISSING_SECRET":
-		return "Set the API key environment variable configured in data/config/config.toml, or place it in .env in the current working directory or in data/config/.env.", []string{
+		return "Set the required Gemini API key before running summary-backed index or other LLM-backed commands. The key has no default.", []string{
+			"aascribe config gemini_api_key=your-real-key",
 			"export GEMINI_API_KEY=your-real-key",
-			"echo 'GEMINI_API_KEY=your-real-key' >> .env",
 			"echo 'GEMINI_API_KEY=your-real-key' >> ./data/config/.env",
-			"aascribe chat \"Say hello\"",
-			"aascribe --store ./project-mem chat \"Say hello\"",
+			"aascribe index <path>",
 		}
 	case "NOT_IMPLEMENTED":
 		switch command {
@@ -790,15 +796,16 @@ func parseErrorGuidance(err *cli.ParseError) (string, []string) {
 	}
 }
 
-func decorateData(data any, primaryTextKey string, delivered *llmoutput.DeliveredOutput) any {
-	if !delivered.Hint.Truncated {
+func decorateData(data any, primaryTextKey string, delivered *largeoutput.DeliveredOutput, cfg largeoutput.Config) any {
+	if !delivered.Continuation.Truncated {
 		return data
 	}
+	transport := buildTransportEnvelope(delivered.Continuation, cfg)
 	payload, ok := data.(map[string]any)
 	if !ok {
 		return map[string]any{
-			"value":     data,
-			"transport": delivered.Hint,
+			primaryTextKey: delivered.InlineText,
+			"transport":    transport,
 		}
 	}
 	cloned := make(map[string]any, len(payload)+1)
@@ -806,20 +813,81 @@ func decorateData(data any, primaryTextKey string, delivered *llmoutput.Delivere
 		cloned[key] = value
 	}
 	cloned[primaryTextKey] = delivered.InlineText
-	cloned["transport"] = delivered.Hint
+	cloned["transport"] = transport
 	return cloned
 }
 
-func renderDeliveredText(delivered *llmoutput.DeliveredOutput) string {
-	if !delivered.Hint.Truncated {
+func renderDeliveredText(delivered *largeoutput.DeliveredOutput, cfg largeoutput.Config) string {
+	if !delivered.Continuation.Truncated {
 		return delivered.InlineText
 	}
+	c := delivered.Continuation
 	return strings.TrimSpace(fmt.Sprintf(`%s
 
 [partial output]
 output_id: %s
 range: %d..%d of %d runes
-next: %s`, delivered.InlineText, delivered.Hint.OutputID, delivered.Hint.InlineRangeStart, delivered.Hint.InlineRangeEnd, delivered.Hint.TotalRunes, delivered.Hint.NextSuggestion))
+next: %s`, delivered.InlineText, c.OutputID, c.InlineRangeStart, c.InlineRangeEnd, c.TotalRunes, NextOutputSliceCommand(c.OutputID, c.NextOffset, cfg)))
+}
+
+// buildTransportEnvelope produces the aascribe-specific JSON shape consumers
+// expect under data.transport, composing the next_suggestion and
+// available_commands strings from the structured Continuation fields.
+func buildTransportEnvelope(c largeoutput.Continuation, cfg largeoutput.Config) map[string]any {
+	out := map[string]any{
+		"stored":             c.Stored,
+		"truncated":          c.Truncated,
+		"inline_range_start": c.InlineRangeStart,
+		"inline_range_end":   c.InlineRangeEnd,
+		"total_bytes":        c.TotalBytes,
+		"total_runes":        c.TotalRunes,
+	}
+	if c.OutputID != "" {
+		out["output_id"] = c.OutputID
+		out["next_suggestion"] = NextOutputSliceCommand(c.OutputID, c.NextOffset, cfg)
+		out["available_commands"] = AvailableOutputCommands(c.OutputID, cfg)
+	}
+	if c.TruncationMsg != "" {
+		out["truncation_msg"] = c.TruncationMsg
+	}
+	if len(c.Hints) > 0 {
+		out["hints"] = c.Hints
+	}
+	return out
+}
+
+// NextOutputSliceCommand returns the aascribe-shaped command string the agent
+// should run to fetch the next chunk of a stored output.
+func NextOutputSliceCommand(id string, nextOffset int, cfg largeoutput.Config) string {
+	return fmt.Sprintf("aascribe output slice %s --offset %d --limit %d", id, nextOffset, cfg.DefaultSliceRunes)
+}
+
+// MapLargeOutputErr translates a largeoutput sentinel error into the matching
+// aascribe apperr.Error so the JSON envelope and exit code stay backward
+// compatible. Pass the id the caller looked up (or "" if not applicable).
+func MapLargeOutputErr(err error, id string) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, largeoutput.ErrNotFound) {
+		return apperr.NotFoundOutput(id)
+	}
+	if errors.Is(err, largeoutput.ErrInvalidOffset) {
+		return apperr.InvalidArguments("%s", err.Error())
+	}
+	return err
+}
+
+// AvailableOutputCommands lists the aascribe commands an agent can use to
+// inspect a stored output.
+func AvailableOutputCommands(id string, cfg largeoutput.Config) []string {
+	return []string{
+		fmt.Sprintf("aascribe output show %s", id),
+		fmt.Sprintf("aascribe output head %s --lines %d", id, cfg.DefaultHeadLines),
+		fmt.Sprintf("aascribe output tail %s --lines %d", id, cfg.DefaultTailLines),
+		fmt.Sprintf("aascribe output slice %s --offset %d --limit %d", id, cfg.DefaultSliceRunes, cfg.DefaultSliceRunes),
+		fmt.Sprintf("aascribe output meta %s", id),
+	}
 }
 
 func prefixExamples(values []string, prefix string) []string {

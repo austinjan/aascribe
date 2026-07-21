@@ -47,6 +47,15 @@ func newParseError(kind ParseErrorKind, scope, token string, message string, arg
 	}
 }
 
+func newUnsupportedQueryError(scope, token string, message string, args ...any) *ParseError {
+	return &ParseError{
+		base:  apperr.UnsupportedQuery(message, args...),
+		Kind:  ParseErrorInvalidFlagValue,
+		Scope: scope,
+		Token: token,
+	}
+}
+
 func newUnknownCommandError(token string) *ParseError {
 	err := newParseError(ParseErrorUnknownCommand, "root", token, "Unknown subcommand %s.", token)
 	err.Suggestions = suggestCommand(token, topLevelCommands())
@@ -176,5 +185,5 @@ func min3(a, b, c int) int {
 }
 
 func topLevelCommands() []string {
-	return []string{"init", "logs", "output", "operation", "index", "describe", "remember", "consolidate", "recall", "chat", "summarize", "list", "show", "forget"}
+	return []string{"init", "config", "logs", "output", "operation", "index", "describe", "remember", "consolidate", "recall", "chat", "summarize", "list", "show", "forget"}
 }

@@ -1,6 +1,6 @@
 ---
 name: indexing-folder
-description: Use this skill as the default repo-scoped question-answering and file-routing tool whenever the user asks about how something is handled in the current repository or folder, wants to find files related to a topic, asks whether a folder mentions a concept, or needs exact line-level confirmation. Do this even when the user does not mention aascribe, index, map, or search. The skill uses aascribe map for semantic routing, aascribe search for exact matches and line numbers, then direct file inspection for final proof. Also use it when the user explicitly asks to index a folder, inspect an index map, refresh summaries, or check async indexing operations.
+description: Use this skill as the default repo-scoped question-answering and file-routing tool whenever the user asks how something is handled in the current repository or folder, wants related files, asks whether a folder mentions a concept, or needs exact line-level confirmation. Route by intent: read known files directly, search known exact terms first, and use aascribe map for uncertain terminology or broad semantic routing. Also use it when the user explicitly asks to index a folder, inspect an index map, refresh summaries, or check async indexing operations.
 ---
 
 # aascribe Index Skill
@@ -12,16 +12,16 @@ Typical trigger examples:
 - The user asks how a topic is handled in this project, such as "how is zsh configured here?"
 - The user asks which files are related to a feature, concept, command, error, or setup flow.
 - The user asks whether this folder mentions a term, file path, setting, or API.
-- The user asks for line numbers, snippets, exact mentions, or every occurrence inside a repo scope.
+- The user asks for line numbers, snippets, exact mentions, or an exhaustive mention audit inside a repo scope.
 - The user asks to understand, orient around, or inspect a local folder before answering.
 
 ## What aascribe Gives You
 
 `aascribe index` scans a directory, summarizes direct files per folder, and writes local metadata files named `.aascribe_index_meta.json` beside indexed directories.
 
-`aascribe map` reads those metadata files and returns a routing overview. Use the map to decide which folders or files to inspect next. The map is not a substitute for reading the target source file when precision matters.
+`aascribe map` reads those metadata files and returns a routing overview. Use the map to decide which folders or files to inspect next. The map is not a substitute for reading the target source file when precision matters. Keep the first map bounded; use bare `--tag` to list available tags, `--tag <tag>` (repeatable with AND semantics) to return only related files, or `--recent-modified` to return the 20 newest current files visible to the map.
 
-`aascribe search` performs exact text search with line-level matches. Use it after `map` to confirm exact mentions, line numbers, and snippets. It prefers system search tools in this order: `rg`, `git grep`, `grep`, then built-in search.
+`aascribe search` performs exact text search with matching-line results. Use it first when the query already supplies an exact term; use it after `map` only when semantic routing was needed. Fixed-string auto mode tries `rg`, `git grep`, `grep`, then builtin with one shared scope. Regex auto mode uses compatible `rg`, then builtin.
 
 Default to running with summaries. Use `--no-summary` only when you need a structural overview and will inspect files manually anyway. Content questions, such as "what does X cover?" or "where is Y discussed?", require summaries.
 
@@ -54,85 +54,60 @@ If the bundled binary is unavailable, fall back to `aascribe` on `PATH` only aft
 command -v aascribe
 ```
 
-## Standard Workflow
+## Intent-Based Routing
 
-1. Initialize the project store if this repository has not used `aascribe` before.
+Choose evidence according to the question before selecting a command:
+
+- **Known file or location:** read it directly. Consult a map only if broader context is useful.
+- **Known literal, symbol, path, or error:** search first with fixed-string mode, then read the matching source.
+- **Unknown terminology or broad concept:** use an existing, trustworthy map for semantic routing; otherwise use read-only filesystem discovery. Search candidate scopes when exact confirmation helps.
+
+Source files, tests, configuration, and generated artifacts are final evidence as relevant. Map summaries are routing hypotheses, not proof.
+
+## Read-Only Repository Questions (Default)
+
+Ordinary repository questions are read-only. Locate the bundled binary, inspect whether `.aascribe_index_meta.json` already exists, and use existing metadata only when it is useful. If metadata is absent or cannot be trusted, use read-only filesystem discovery and inspect source files directly.
+
+Do not run `init`, indexing, refresh, dirty-marking, or cleanup commands unless the user explicitly requested indexing, refresh, or another repository mutation. Missing metadata is not permission to create it.
+
+Existing metadata can be read without modifying the repository:
+
+```bash
+"$AASCRIBE" map <folder>
+"$AASCRIBE" map <folder> --tag
+"$AASCRIBE" map <folder> --tag <tag>
+"$AASCRIBE" map <folder> --recent-modified
+"$AASCRIBE" --format json map <folder>
+```
+
+Treat map summaries as routing hints. Read the selected source files before making final claims.
+
+## Explicitly Mutating Index Workflow
+
+Use this workflow only when the user explicitly asks to initialize, index, or refresh a folder.
+
+1. Initialize the project store when requested and needed.
 
 ```bash
 "$AASCRIBE" init
 ```
 
-This creates `./data/config/config.toml` with a Gemini config template.
-For LLM-backed summaries, ensure the configured secret exists before indexing:
+This creates `./data/config/config.toml` with a Gemini config template. For LLM-backed summaries, use the configured secret-handling mechanism; do not place a real secret in commands or skill prose.
 
-```bash
-export GEMINI_API_KEY="your-real-key"
-```
-
-If the secret is unavailable and the user only needs structure, use the structural-only workflow below.
-
-2. Index the target folder.
+2. Index or refresh the requested target.
 
 ```bash
 "$AASCRIBE" index <folder> --depth 2
-```
-
-Use `--no-summary` for a fast structural pass.
-
-```bash
 "$AASCRIBE" index <folder> --depth 2 --no-summary
-```
-
-Use `--refresh` when summaries may be stale and you want to regenerate them.
-
-```bash
 "$AASCRIBE" index <folder> --depth 2 --refresh
 ```
 
-3. Read the folder map.
+Indexing writes `.aascribe_index_meta.json` in each indexed directory. `init` writes store configuration and data directories. Refresh rewrites the affected metadata.
+
+3. Inspect the resulting map and source files.
 
 ```bash
 "$AASCRIBE" map <folder>
-```
-
-Use JSON when another tool or agent needs to parse the map.
-
-```bash
-"$AASCRIBE" --format json map <folder>
-```
-
-4. Use the map to pick likely related files.
-
-Look for folder summaries, file summaries, and node state:
-
-- `ready`: metadata exists and can be used for routing.
-- `dirty`: metadata exists but was marked stale; re-run `"$AASCRIBE" index`.
-- `unindexed`: metadata is missing; inspect directly or run `"$AASCRIBE" index` on that folder.
-
-After choosing likely files, read the actual files with normal filesystem tools before making code changes or final claims.
-
-5. Confirm exact mentions when the user asks for line-level facts.
-
-```bash
-"$AASCRIBE" search <query> <folder> --fixed-strings
-```
-
-Use `--ignore-case` for case-insensitive lookup, and repeat `--glob <pattern>` to narrow file types.
-
-```bash
-"$AASCRIBE" search "GEMINI_API_KEY" . --fixed-strings --glob "*.go"
-```
-
-6. Check what needs re-indexing when unsure.
-
-```bash
-"$AASCRIBE" index eval <folder>
-```
-
-If the result says files or folders need indexing, run:
-
-```bash
-"$AASCRIBE" index <folder>
 ```
 
 ## Async Indexing
@@ -172,7 +147,9 @@ To cancel a pending or running operation:
 
 Do not cancel completed, failed, or already useful operations unless the user asks.
 
-## Finding Related Files
+## Indexing To Find Related Files (Explicit Request)
+
+Use this section only when the user explicitly requested indexing. For an ordinary read-only question, follow Intent-Based Routing instead.
 
 Use this pattern when asked to find relevant implementation files:
 
@@ -188,10 +165,12 @@ Then inspect the folders that look relevant. If a folder is `unindexed` or too b
 "$AASCRIBE" map ./internal/index
 ```
 
-For content-specific searches, combine the map with exact search:
+For content-specific searches, use repeated fixed-string searches so fallback engines do not reinterpret regex syntax:
 
 ```bash
-"$AASCRIBE" search "operation_id|PathIndexTree|\\.aascribe_index_meta" .
+"$AASCRIBE" search "operation_id" . --fixed-strings
+"$AASCRIBE" search "PathIndexTree" . --fixed-strings
+"$AASCRIBE" search ".aascribe_index_meta" . --fixed-strings
 ```
 
 The map helps choose where to look; `search` and file reads confirm the exact code.
@@ -247,10 +226,16 @@ Use this when the map looks old or the code has changed substantially.
 
 Use this when the map identifies likely folders but the user needs exact mentions, snippets, or line numbers.
 
+## Absence Claims
+
+A zero-result search supports an absence claim only when the result covers an adequate declared scope, reports `complete: true`, and reports `truncated: false`.
+
+Do not claim absence when metadata freshness is unknown, traversal skipped or could not read content, the selected engine covers a narrower scope, or output was truncated. Narrow the scope, use a reliable compatible engine, raise the limit, or inspect the relevant files directly before making the claim.
+
 ## Safety Notes
 
 - `"$AASCRIBE" map` is a routing overview, not proof. Always inspect source files for exact behavior.
-- Do not use `"$AASCRIBE" map` as proof of absence. If the user asks for exact mentions, line numbers, or every occurrence, use `"$AASCRIBE" search` and then read matched files as needed.
+- Do not use `"$AASCRIBE" map` as proof of absence. Search returns one result per matching line, not per individual occurrence; validate scope and completeness, then read matched files as needed.
 - `"$AASCRIBE" index` writes `.aascribe_index_meta.json` files into indexed directories.
 - `"$AASCRIBE" index clean <folder> --dry-run --force` shows generated metadata files that would be removed.
 - `"$AASCRIBE" index clean <folder> --force` removes generated metadata files. Use it only when cleanup is intended.

@@ -39,7 +39,15 @@ func InitializeStore(path string, force bool) (*InitOutcome, error) {
 	info, err := os.Stat(path)
 	existedBefore := err == nil
 	if err == nil && !force {
-		return nil, apperr.StoreAlreadyExists(path)
+		if !info.IsDir() {
+			return nil, apperr.StoreAlreadyExists(path)
+		}
+		configPath := config.ConfigPath(path)
+		if _, configErr := os.Stat(configPath); configErr == nil {
+			return nil, apperr.StoreAlreadyExists(path)
+		} else if !os.IsNotExist(configErr) {
+			return nil, apperr.IOError("Failed to inspect config file: %s.", configPath)
+		}
 	}
 	if err != nil && !os.IsNotExist(err) {
 		return nil, apperr.IOError("Failed to inspect store root: %s.", path)

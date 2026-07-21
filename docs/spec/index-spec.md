@@ -23,7 +23,24 @@ aascribe index <path>
   [--async]
   [--refresh]
   [--no-summary]
+  [--metadata-method <method>]...
+  [--no-metadata-methods]
+  [--index-plan <file>]
   [--max-file-size <bytes>]
+```
+
+Discovery:
+
+```text
+aascribe index methods [--stage file|folder|start|end]
+aascribe --format json index methods [--stage file|folder|start|end]
+aascribe index plan validate <file>
+aascribe index review <path> [--method <method>]
+aascribe index review propose <review-json>
+aascribe index review patch <proposal-json>
+aascribe index review status <checkpoint-id>
+aascribe index review accept <checkpoint-id>
+aascribe index review restore <checkpoint-id>
 ```
 
 | Flag              | Type       | Default     | Meaning                                                                 |
@@ -35,9 +52,64 @@ aascribe index <path>
 | `--async`         | bool       | `false`     | Start indexing as a persisted operation and return `OperationAccepted`.   |
 | `--refresh`       | bool       | `false`     | Reserved for incremental re-indexing. Accepted but not yet consumed.     |
 | `--no-summary`    | bool       | `false`     | Skip all summarization. Files are still walked, hashed, and recorded.    |
+| `--metadata-method` | string (×N) | default set | Select explicit metadata methods. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.retrieval.v1`, `builtin.routing.v1`, `builtin.run-context.v1`, `builtin.run-report.v1`. |
+| `--no-metadata-methods` | bool | `false` | Disable optional/default methods beyond required base metadata. |
+| `--index-plan` | path | off | Read an `index-plan-v1` TOML file and use `[methods].enabled` as the method selection. |
 | `--max-file-size` | int64      | `1_048_576` | Byte ceiling for summarization. `0` is valid; negative is rejected.      |
 
 Exactly one positional path argument is required. Zero or multiple positional args return a parse error.
+
+Metadata method selection:
+
+- With no metadata method flags, `index` uses the default method set: `base` plus `summary`.
+- `base` is required and always runs because it records path, size, mod time, content hash, file type, status, skip reason, and error state.
+- `summary` runs by default and requires a configured LLM provider. If LLM config or the configured API-key environment variable is unavailable, summary-enabled indexing fails instead of using a local fake summary.
+- `summary` is disabled by `--no-summary`, `--no-metadata-methods`, or by an explicit metadata method list that omits `summary`.
+- `builtin.classify.v1` is an optional deterministic file method. It does not require summary and can run from path/file-type signals under `--no-summary`.
+- `builtin.retrieval.v1` is an optional deterministic file method. It does not require summary and emits LLM-facing retrieval terms, aliases, entities, and likely queries from bounded file text plus path/summary signals.
+- `builtin.routing.v1` is an optional deterministic folder method. It aggregates child classification fields into category counts, tag counts, dominant category, low-confidence counts, and uncategorized counts.
+- `builtin.run-context.v1` is an optional start lifecycle method. It writes root-only run context metadata under `run_methods` and does not mutate downstream file or folder method input.
+- `builtin.run-report.v1` is an optional end lifecycle method. It writes root-only final run aggregates under `run_methods` after traversal completes.
+- When one or more `--metadata-method` flags are provided, `index` uses the requested method set plus required `base`.
+- `--metadata-method` and `--no-metadata-methods` are mutually exclusive.
+- `--index-plan` is mutually exclusive with `--metadata-method` and `--no-metadata-methods`.
+- `index plan validate <file>` validates version, enabled method ids, duplicate custom ids, custom descriptor shape, and duplicate enabled methods without running index.
+- `index review` starts a checkpointed review workflow for retrieval metadata and prompt iteration. It returns agent-readable `status`, `writes`, `artifacts`, and `next` fields so an AI caller can safely proceed through review → propose → patch → verify → accept/restore.
+- Async `--index-plan` snapshots the submitted plan into the operation directory and the worker reads the snapshot.
+- `aascribe index methods` lists method descriptors. Text output is human/agent-readable; JSON output exposes the descriptor payload used by callers.
+
+### 2.1.1 `aascribe index review`
+
+`index review` is an opt-in quality workflow. It does not run during normal indexing.
+
+```text
+aascribe index review <path> [--method builtin.retrieval.v1]
+aascribe index review propose <review-json>
+aascribe index review patch <proposal-json>
+aascribe index review status <checkpoint-id>
+aascribe index review accept <checkpoint-id>
+aascribe index review restore <checkpoint-id>
+```
+
+State model:
+
+| State | Meaning | Typical next actions |
+| --- | --- | --- |
+| `review_created` | A checkpoint and review report were written. Metadata and prompts are unchanged. | `propose`, `accept`, `restore` |
+| `proposal_created` | A prompt proposal was written. Metadata and prompts are unchanged. | `patch`, `restore` |
+| `prompt_patched` | A prompt file was patched. Re-index and review again before accepting. | `accept`, `restore` |
+| `accepted` | The checkpoint was closed as accepted. | `status` |
+| `restored` | Checkpointed metadata and prompt files were restored. | `status` |
+
+Every review subcommand should expose:
+
+- `status`: machine-readable workflow state
+- `checkpoint_id`: stable handle for accept/restore/status
+- `writes`: booleans for `metadata`, `prompt`, `checkpoint`, and report/proposal artifacts
+- `artifacts`: typed paths or checkpoint ids
+- `next`: suggested next commands with conditions
+
+Prompt files live under `prompts/retrieval/` and are part of retrieval-method behavior. Prompt changes should be proposed and checkpointed, not hidden in source code.
 
 When `--async` is set, the parent command creates a persisted operation under the active store, starts a background index worker process, and returns an `OperationAccepted` payload. The worker writes lifecycle snapshots to `<store>/operations/<operation-id>/operation.json`, event history to `events.jsonl`, and the final `PathIndexTree` result to `result.json`.
 
@@ -171,9 +243,12 @@ When a file is summarizable:
 ```json
 {
   "root": "/abs/path/to/indexed/root",
+  "report_path": "/abs/path/to/data/report/2026-04-03-101233-indexing-report.md",
   "tree": { IndexedPathNode }
 }
 ```
+
+`report_path` is present after a successful CLI `index` run. It points to the durable Markdown completion report written under the report directory adjacent to the active memory store, which is `data/report/` for the default `data/memory` store.
 
 ### 5.2 `IndexedPathNode`
 
@@ -330,6 +405,8 @@ CLI text output:
 ## 10. Rendering
 
 `renderIndexText` in `internal/command/command.go` turns `PathIndexTree` into an indented, depth-prefixed text tree. Directory rows get a trailing `/`; rows with a summary append ` - <summary>`. This is the text returned when the CLI is invoked with `--format text`; JSON output is the full `PathIndexTree` structure.
+
+After a successful sync or async `index` job, the CLI writes a Markdown completion report named `<yyyy-mm-dd-HHMMSS>-indexing-report.md` under the report directory adjacent to the active memory store. With the default store, this is `data/report/`. The report includes file counts, unchanged skipped count, token usage when available, covered folders, effective options, metadata count, warning details, not-indexed reasons, and failure reasons.
 
 ## 11. Error codes (via `internal/apperr`)
 

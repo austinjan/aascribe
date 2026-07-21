@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "aascribe://shapes/SearchResult",
   "title": "SearchResult",
-  "description": "Exact text search result with line-level matches.",
+  "description": "Exact text search result with one result per matching line and explicit declared-scope completeness.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -19,13 +19,91 @@
       "enum": ["rg", "git-grep", "grep", "builtin"],
       "description": "Search engine that produced the result."
     },
+    "query_mode": {
+      "type": "string",
+      "enum": ["fixed", "regex"],
+      "description": "How the query was interpreted by the engine."
+    },
+    "match_unit": {
+      "type": "string",
+      "const": "line",
+      "description": "One result represents one matching line, even when the query occurs repeatedly on that line."
+    },
+    "column_unit": {
+      "type": "string",
+      "const": "byte",
+      "description": "Columns are one-based byte offsets."
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "root": { "type": "string" },
+        "tracked_only": { "type": "boolean", "const": false },
+        "hidden": { "type": "boolean", "const": false },
+        "ignored": { "type": "boolean", "const": false },
+        "ignore_sources": {
+          "type": "array",
+          "items": { "type": "string", "enum": [".gitignore", ".aaignore"] }
+        }
+      },
+      "required": ["root", "tracked_only", "hidden", "ignored", "ignore_sources"]
+    },
     "match_count": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Compatibility alias for returned_match_lines; not the number of individual occurrences."
+    },
+    "returned_match_lines": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of matching-line results returned in matches."
     },
     "truncated": {
       "type": "boolean",
       "description": "True when --max-count limited returned matches."
+    },
+    "complete": {
+      "type": "boolean",
+      "description": "True only when every candidate in the declared scope was searched without a partial failure."
+    },
+    "partial_reasons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "type": "string" },
+          "path": { "type": "string" },
+          "message": { "type": "string" }
+        },
+        "required": ["kind", "path", "message"]
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "type": "string", "const": "binary" },
+          "path": { "type": "string" }
+        },
+        "required": ["kind", "path"]
+      }
+    },
+    "engine_failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "engine": { "type": "string", "enum": ["rg", "git-grep", "grep"] },
+          "kind": { "type": "string", "const": "execution_failed" },
+          "message": { "type": "string" }
+        },
+        "required": ["engine", "kind", "message"]
+      }
     },
     "matches": {
       "type": "array",
@@ -54,14 +132,29 @@
       }
     }
   },
-  "required": ["query", "root", "engine", "match_count", "truncated", "matches"],
+  "required": ["query", "root", "engine", "query_mode", "match_unit", "column_unit", "scope", "match_count", "returned_match_lines", "truncated", "complete", "partial_reasons", "exclusions", "engine_failures", "matches"],
   "examples": [
     {
       "query": "zprofile",
       "root": "/abs/path/to/project",
       "engine": "rg",
+      "query_mode": "fixed",
+      "match_unit": "line",
+      "column_unit": "byte",
+      "scope": {
+        "root": "/abs/path/to/project",
+        "tracked_only": false,
+        "hidden": false,
+        "ignored": false,
+        "ignore_sources": [".gitignore", ".aaignore"]
+      },
       "match_count": 1,
+      "returned_match_lines": 1,
       "truncated": false,
+      "complete": true,
+      "partial_reasons": [],
+      "exclusions": [],
+      "engine_failures": [],
       "matches": [
         {
           "path": "docs/setup.md",

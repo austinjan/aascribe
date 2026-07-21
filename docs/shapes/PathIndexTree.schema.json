@@ -9,6 +9,9 @@
     "root": {
       "type": "string"
     },
+    "report_path": {
+      "type": "string"
+    },
     "tree": {
       "$ref": "IndexedPathNode.schema.json"
     }

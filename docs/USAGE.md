@@ -14,6 +14,7 @@ Complete command and flag reference for `aascribe`.
 - [Exit codes](#exit-codes)
 - [Commands](#commands)
   - [init](#init)
+  - [config](#config)
   - [logs](#logs)
   - [operation](#operation)
   - [index](#index)
@@ -27,6 +28,20 @@ Complete command and flag reference for `aascribe`.
   - [show](#show)
   - [forget](#forget)
 - [Recipes](#recipes)
+
+---
+
+## Repository evidence workflow
+
+Repository questions are read-only unless the caller explicitly requests indexing, refresh, dirty-marking, or cleanup. Choose the shortest evidence path that fits the question:
+
+- read a known file or location directly
+- search a known literal, symbol, path, or error first
+- use `map` for uncertain terminology or broad semantic routing, then inspect selected source files
+
+Metadata presence is separate from verified freshness. `state: "ready"` means local metadata exists; trust it only when the same node reports `freshness: "fresh"` and `freshness_checked: true` without relevant partial issues.
+
+Search returns matching lines, not individual occurrences. A zero-result response supports an absence claim only when its declared `scope` is adequate, `complete: true`, and `truncated: false`.
 
 ---
 
@@ -80,8 +95,8 @@ On error:
 {
   "ok": false,
   "error": {
-    "code": "STORE_NOT_FOUND",
-    "message": "No store at /path/to/project/data/memory. Run `aascribe init`."
+    "code": "MISSING_SECRET",
+    "message": "Environment variable GEMINI_API_KEY is not set or is empty."
   },
   "meta": { ... }
 }
@@ -108,6 +123,7 @@ On error:
 Create a new store. Sets up a filesystem-first directory layout for short-term memory, long-term memory, index data, cache data, output transport data, and layout metadata.
 Also creates a safe default `config.toml` template in the sibling `data/config/` directory when one does not already exist.
 The template stores the API key environment variable name, not the secret itself.
+Commands that need the store create the default store and config skeleton automatically when the store is missing. Run `init` explicitly when you want to inspect or repair setup before another command.
 
 ```
 aascribe init [--store <path>] [--force]
@@ -157,6 +173,21 @@ OutputShape: StoreInitResult
   }
 }
 ```
+
+---
+
+### `config`
+
+Set required local configuration values for the active store. If the store does not exist yet, `config` creates the default store and config skeleton first.
+
+```bash
+aascribe config gemini_api_key=<key>
+aascribe --store ./project-mem config gemini_api_key=<key>
+```
+
+The config skeleton only contains non-secret settings such as provider, model, `api_key_env`, and timeout. The Gemini API key is required for summary-backed `index` and other LLM-backed commands, has no default, and must be supplied by the user.
+
+The key is written to `data/config/.env` as `GEMINI_API_KEY` and is not echoed back in command output.
 
 ---
 
@@ -311,6 +342,7 @@ Walk a directory, summarize direct files per folder, and persist local metadata.
 
 ```
 aascribe index <path> [flags]
+aascribe index methods [--stage file|folder|start|end]
 aascribe index dirty <path>
 aascribe index eval <path>
 ```
@@ -325,6 +357,9 @@ aascribe index eval <path>
 | `--async` | off | Start indexing as a persisted operation and return an `operation_id` immediately |
 | `--refresh` | off | Ignore cache; regenerate summaries |
 | `--no-summary` | off | Return structure only. Much faster |
+| `--metadata-method <method>` | default set | Select explicit metadata methods. Repeatable. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.retrieval.v1`, `builtin.routing.v1`, `builtin.run-context.v1`, `builtin.run-report.v1` |
+| `--no-metadata-methods` | off | Disable optional/default methods beyond required base metadata |
+| `--index-plan <file>` | off | Use an `index-plan-v1` TOML file to select built-in methods |
 | `--max-file-size <bytes>` | `1048576` | Files over this size get metadata only, no summary |
 
 Behavior notes:
@@ -332,6 +367,22 @@ Behavior notes:
 - `index` treats `.gitignore` and `.aaignore` as folder-scoped blacklist exclude files during traversal.
 - Text-file detection is content-based, not extension-based.
 - `index` writes `.aascribe_index_meta.json` files in indexed directories.
+- With no metadata method flags, `index` uses the default method set: required `base` metadata plus `summary`.
+- If `--metadata-method` flags are provided, `index` uses those methods plus required `base`.
+- `--no-metadata-methods` keeps only required `base` metadata.
+- `--index-plan` is mutually exclusive with `--metadata-method` and `--no-metadata-methods`.
+- `index plan validate <file>` validates an `index-plan-v1` TOML file without running index.
+- `index plan --help` is written as an AI-agent contract for discovering methods, drafting TOML, validating, revising, and only then running the plan.
+- `index review` provides a checkpointed prompt-improvement workflow for retrieval metadata: review current output, propose a prompt patch, patch, re-index, then accept or restore.
+- Async `--index-plan` runs snapshot the submitted plan into the operation directory before starting the worker.
+- `builtin.classify.v1` classifies text/status-eligible direct files using deterministic path, file type, and optional summary signals.
+- `builtin.retrieval.v1` writes LLM-facing retrieval hints: retrieval terms, aliases, entities, and likely queries derived from bounded file text plus path/summary signals.
+- `builtin.routing.v1` writes folder-level routing metadata by aggregating child classification output.
+- `builtin.run-context.v1` writes root-only start lifecycle metadata under `run_methods`; it does not feed file or folder method input.
+- `builtin.run-report.v1` writes root-only end lifecycle aggregates under `run_methods` after traversal.
+- `index methods` lists available methods with descriptions; use `--format json` for machine-readable descriptors.
+- `summary` is LLM-backed. If LLM config or the configured API-key environment variable is missing, summary-enabled indexing returns an error instead of using a local fallback summary.
+- Successful sync and async `index` jobs also write a Markdown completion report under `data/report/` when using the default `data/memory` store.
 - Each `.aascribe_index_meta.json` is local-only: it describes the current folder and its direct files, not a full descendant tree.
 - Metadata records persisted file descriptions, non-indexed files, failures, and warnings.
 - `index` uses bounded direct-file concurrency. Increase `--concurrency` to speed up summarize/hash work; keep it low if the LLM backend or machine is the bottleneck.
@@ -347,6 +398,17 @@ aascribe index --depth 2 --include '*.rs' --include '*.toml' ./src
 aascribe index --concurrency 8 ./src
 aascribe index --async ./src
 aascribe index --no-summary .           # structure-only, fast
+aascribe index --metadata-method summary .
+aascribe index --metadata-method builtin.classify.v1 --metadata-method builtin.retrieval.v1 --metadata-method builtin.routing.v1 .
+aascribe index --metadata-method builtin.run-context.v1 --metadata-method builtin.run-report.v1 .
+aascribe index methods
+aascribe --format json index methods --stage file
+aascribe index plan validate ./aascribe.index.toml
+aascribe index --index-plan ./aascribe.index.toml .
+aascribe index review ./coding --method builtin.retrieval.v1
+aascribe index review propose ./data/report/2026-05-19-retrieval-review.json
+aascribe index review patch ./data/report/2026-05-19-retrieval-prompt-proposal.json
+aascribe index review restore index-review-20260519T120000Z
 aascribe index --refresh .              # force re-summarize
 aascribe index dirty ./src              # mark existing metadata stale
 aascribe index eval ./src               # preview changed vs unchanged work
@@ -363,6 +425,7 @@ OutputShape: OperationAccepted (index --async)
   "ok": true,
   "data": {
     "root": "/abs/path/to/src",
+    "report_path": "/abs/path/to/data/report/2026-04-03-101233-indexing-report.md",
     "tree": {
       "path": "src",
       "type": "dir",
@@ -388,26 +451,57 @@ OutputShape: OperationAccepted (index --async)
 Assemble a hierarchy view by reading local `.aascribe_index_meta.json` files recursively.
 
 ```
-aascribe map <path>
+aascribe map <path> [--depth <N>] [--summary-only] [--max-files-per-dir <N>] [--full]
+aascribe map <path> --tag
+aascribe map <path> --tag <tag> [--tag <tag> ...]
+aascribe map <path> --recent-modified
 ```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--depth <N>` | `2` | Maximum child-directory depth in the returned projection |
+| `--summary-only` | off | Omit direct-file detail while preserving routing summaries and continuations |
+| `--max-files-per-dir <N>` | `20` | Maximum direct files returned per directory |
+| `--full` | off | Disable semantic depth and file bounds; explicit partial errors still apply |
+| `--tag` | off | With no value, list tags and file counts. With a value, list related files. Repeat values with AND semantics |
+| `--recent-modified` | off | List up to 20 current files visible to the map by filesystem modification time, newest first |
+
+Focused views:
+
+- Bare `--tag` returns a compact, alphabetically sorted tag catalog with unique file counts.
+- `--tag <tag>` performs case-insensitive exact tag matching. Repeating the flag requires every supplied tag.
+- `--recent-modified` returns a compact global list instead of the hierarchy. Narrow `<path>` to inspect more than the first 20 files.
+- Tag and recent-modified views traverse all accessible metadata below `<path>`, report whether the result is complete, and do not include file summaries.
+- `--tag` and `--recent-modified` cannot be combined with each other or with hierarchy projection flags.
 
 Behavior notes:
 
-- `map` is a routing overview for agents. Use it to choose the folder or file to inspect next; for precise answers, inspect the target file directly or re-run `index` without `--no-summary`.
-- `map` reads metadata files; it does not re-summarize source files.
-- `map` applies `.gitignore` and `.aaignore` while traversing child directories.
+- `map` is a routing overview for agents. Use it to choose the folder or file to inspect next; for precise answers, inspect the target file directly. Re-index only when the caller explicitly requests repository mutation.
+- `map` reads metadata and checks direct-file content fingerprints against the current filesystem; it does not re-summarize source files.
+- `map` applies the current `.gitignore` and `.aaignore` blacklist subset while traversing. `!` re-inclusion is not supported and `ignore_policy` discloses this limitation.
+- The default projection is bounded. `projection` declares the effective controls and each `omitted` entry provides its reason, path, and exact continuation command.
+- `--full` restores complete traversal for migrating callers that depended on the previous unbounded behavior.
 - `text` is the default output and returns a compact tree intended to be easier for LLMs to read.
 - `--format json` returns a machine-friendly assembled projection.
+- Oversized text or JSON is a final safety net: inline output contains a preview and `transport`; the complete payload is stored under `output_id` and can be read with `output slice`.
 - `index map <path>` is supported as an alias, but `map <path>` is the preferred surface.
-- map node states are simple on purpose:
-  - `ready`: local metadata exists
+- map node state reports metadata access, while freshness reports filesystem drift:
+  - `ready`: local metadata exists; consult `freshness`
   - `dirty`: local metadata exists but was explicitly marked stale
   - `unindexed`: no local metadata file exists yet
+  - `corrupt`: metadata exists but cannot be parsed
+  - `unreadable`: metadata, ignore policy, or directory content could not be read
+- `freshness` is `fresh`, `stale`, or `unknown`; `freshness_checked` states whether direct-file fingerprints were compared.
+- `partial` and structured `issues` expose missing metadata details, corruption, unreadable paths, symlink boundaries, and drift.
+- In-root non-cyclic directory symlinks are followed. Cycles and out-of-root targets stop with structured issues.
 
 **Example**
 
 ```bash
 aascribe map ./tests
+aascribe map ./tests --tag
+aascribe map ./tests --tag docs --tag integration
+aascribe map ./tests --recent-modified
 aascribe --format text map ./tests
 aascribe --format json map ./docs
 ```
@@ -421,14 +515,29 @@ OutputShape: PathIndexMap
   "ok": true,
   "data": {
     "root": "/abs/path/to/tests",
+    "ignore_policy": {
+      "mode": "blacklist",
+      "negation_supported": false,
+      "sources": [".gitignore", ".aaignore"]
+    },
     "state_guide": {
-      "dirty": "Metadata exists but is marked stale. Re-run index before trusting it.",
-      "ready": "Metadata exists for this directory. Use the summary and files shown here first.",
-      "unindexed": "No metadata file exists for this directory yet. If needed, inspect the directory directly or run index on it."
+      "dirty": "Metadata exists and is explicitly marked stale.",
+      "ready": "Metadata exists; consult freshness before trusting summaries.",
+      "unindexed": "Metadata is missing; structural child stubs do not prove descendant absence."
+    },
+    "projection": {
+      "mode": "bounded",
+      "depth": 2,
+      "summary_only": false,
+      "max_files_per_dir": 20
     },
     "map": {
       "path": "/abs/path/to/tests",
       "state": "ready",
+      "freshness": "fresh",
+      "freshness_checked": true,
+      "partial": false,
+      "issues": [],
       "folder_description": "Contains 1 subdirectory.",
       "brief_summary": "Contains 1 subdirectory.",
       "stats": {
@@ -438,6 +547,10 @@ OutputShape: PathIndexMap
         {
           "path": "/abs/path/to/tests/index-fixtures",
           "state": "ready",
+          "freshness": "fresh",
+          "freshness_checked": true,
+          "partial": false,
+          "issues": [],
           "brief_summary": "Contains 4 files and 2 subdirectories."
         }
       ]
@@ -445,6 +558,12 @@ OutputShape: PathIndexMap
   }
 }
 ```
+
+Focused JSON views use smaller result types instead of `PathIndexMap`:
+
+- `--tag`: `{root, mode: "tag_catalog", tags: [{tag, file_count}], complete, issues}`
+- `--tag <tag>`: `{root, mode: "tag_files", query, match: "all", files: [{path, matched_tags}], complete, issues}`
+- `--recent-modified`: `{root, files: [{path, mod_time}], total_files, truncated, complete, issues}`
 
 **Text Output**
 
@@ -461,7 +580,7 @@ OutputShape: PathIndexMap
 
 ### `search`
 
-Run exact text search and return line-level matches. This is the confirmation step after `map` routing.
+Run exact text search and return matching lines. Use it first for a known exact term, or after `map` when semantic routing was needed.
 
 ```
 aascribe search <query> [path] [flags]
@@ -469,7 +588,7 @@ aascribe search <query> [path] [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--engine auto\|rg\|git-grep\|grep\|builtin` | `auto` | Search engine. `auto` tries `rg`, `git grep`, `grep`, then built-in Go search |
+| `--engine auto\|rg\|git-grep\|grep\|builtin` | `auto` | Search engine. Fixed-string auto tries `rg`, `git grep`, `grep`, then builtin; regex auto uses `rg`, then builtin |
 | `--ignore-case` | off | Case-insensitive matching |
 | `--fixed-strings` | off | Treat query as literal text instead of a regular expression |
 | `--glob <pattern>` | — | Include matching files. Repeatable |
@@ -477,9 +596,21 @@ aascribe search <query> [path] [flags]
 
 Behavior notes:
 
-- `search` is for exact confirmation: line numbers, snippets, and every occurrence within the chosen scope.
+- `search` is for exact confirmation: matching lines, line numbers, and snippets. Repeated occurrences on one line are represented by one matching-line result.
 - `search` is not semantic. If you do not know the keyword, use `map` first to route to likely files or folders.
-- `auto` prefers system tools instead of reimplementing them: `rg`, then `git grep`, then `grep`, then a built-in fallback.
+- Fixed-string `auto` tries `rg`, `git grep`, `grep`, then builtin. Regex `auto` uses only compatible `rg`, then builtin.
+- All engines consume the same default candidate scope: tracked and untracked files are included; hidden files and blacklist-matched `.gitignore`/`.aaignore` files are excluded.
+- Regex mode is supported by `rg`, `builtin`, and `auto` (`rg` then `builtin`). Explicit `grep` or `git-grep` regex requests return `UNSUPPORTED_QUERY`; those engines remain available for fixed strings.
+- A file path is an exact scope and searches only that file; it is never broadened to the parent directory.
+- `complete` is false and `partial_reasons` describes unreadable scope when candidate discovery cannot inspect everything. Do not infer absence unless `complete: true`.
+- Search supports matching lines up to 1 MiB. A larger builtin-scanner token produces `complete: false` with a `scanner_limit` reason.
+- Binary files are deliberately excluded and listed in `exclusions`; this is distinct from an I/O failure and does not by itself make the result incomplete.
+- When `auto` safely falls back after an external execution failure, `engine_failures` records the failed attempt. Explicit engine failures return a diagnostic error including engine stderr.
+- `match_count` currently means returned matching lines, not total occurrences.
+- `returned_match_lines` is the precise returned-line count; `match_count` is retained as a compatibility alias.
+- External engines stream results and stop after limit-plus-one evidence, so `--max-count` bounds production as well as rendering.
+- `query_mode` reports `fixed` or `regex`; use it to verify how metacharacters were interpreted.
+- `column_unit: byte` means every reported column is a one-based byte offset.
 - `--format json` returns a stable `SearchResult` payload for agents.
 
 **Example**
@@ -502,8 +633,23 @@ OutputShape: SearchResult
     "query": "zprofile",
     "root": "/abs/path/to/project",
     "engine": "rg",
+    "query_mode": "fixed",
+    "match_unit": "line",
+    "column_unit": "byte",
+    "scope": {
+      "root": "/abs/path/to/project",
+      "tracked_only": false,
+      "hidden": false,
+      "ignored": false,
+      "ignore_sources": [".gitignore", ".aaignore"]
+    },
     "match_count": 1,
+    "returned_match_lines": 1,
     "truncated": false,
+    "complete": true,
+    "partial_reasons": [],
+    "exclusions": [],
+    "engine_failures": [],
     "matches": [
       {
         "path": "docs/setup.md",

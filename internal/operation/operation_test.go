@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/austinjan/aascribe/pkg/llmoutput"
+	"github.com/austinjan/agentcli-core/largeoutput"
 )
 
 func TestCreateWritesInitialStatusSnapshot(t *testing.T) {
@@ -237,7 +237,7 @@ func TestSaveResultStoresOversizedDataThroughOutputTransport(t *testing.T) {
 	if result.Data != nil {
 		t.Fatalf("expected oversized data to be omitted from result.json, got %#v", result.Data)
 	}
-	meta, err := llmoutput.Meta(storePath, result.OutputID)
+	meta, err := largeoutput.Meta(storePath, result.OutputID)
 	if err != nil {
 		t.Fatalf("expected stored output metadata: %v", err)
 	}
