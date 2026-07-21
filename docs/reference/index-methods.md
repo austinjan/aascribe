@@ -4,7 +4,7 @@ Status: Proposed design reference
 
 This document describes the `aascribe index` method model: what index methods are, how file and folder methods differ, how lifecycle hooks work, and what an AI agent needs to know before generating an index plan.
 
-The current implementation supports the built-in `base`, `summary`, `builtin.classify.v1`, `builtin.retrieval.v1`, and `builtin.routing.v1` methods, the `aascribe index methods` discovery command, and `index-plan-v1` validation/execution through `--index-plan`. Lifecycle hooks, LLM-backed classifiers, and custom/external method execution remain planned work tracked in [../tasks/index-metadata-model-tasks.md](../tasks/index-metadata-model-tasks.md).
+The current implementation supports the built-in `base`, `summary`, `builtin.classify.v1`, `builtin.retrieval.v1`, `builtin.routing.v1`, `builtin.run-context.v1`, and `builtin.run-report.v1` methods, the `aascribe index methods` discovery command, and `index-plan-v1` validation/execution through `--index-plan`. LLM-backed classifiers and custom/external method execution remain planned work tracked in [../tasks/index-metadata-model-tasks.md](../tasks/index-metadata-model-tasks.md).
 
 `aascribe --format json index methods` is the source of truth for currently available methods. This document is orientation and design guidance.
 
@@ -104,17 +104,14 @@ The first implemented methods are:
 | `builtin.classify.v1` | `file` | no | no | no | Classifies text/status-eligible files for agent routing using deterministic path, file type, and optional summary signals. |
 | `builtin.retrieval.v1` | `file` | no | no | no | Emits LLM-facing retrieval terms, aliases, entities, and likely queries from bounded file text plus path/summary signals. |
 | `builtin.routing.v1` | `folder` | no | no | no | Aggregates child classifier output into category counts, tag counts, dominant category, low-confidence counts, and uncategorized counts. |
+| `builtin.run-context.v1` | `start` | no | no | no | Records stable root-only run context at index start. |
+| `builtin.run-report.v1` | `end` | no | no | no | Records root-only final run aggregates after traversal. |
 
 `base` always runs. Passing `--metadata-method base` is accepted for compatibility but is a no-op.
 
 `summary` is part of method selection, but it remains on the existing inline hot path that writes top-level `summary` and `summarized_at` fields. It is not a `FileMethod` implementation.
 
-Planned lifecycle methods include:
-
-| ID | Stage | Purpose |
-| --- | --- | --- |
-| `plan.customer-context.v1` | `start` | Captures plan/customer goal and prepares run context. |
-| `plan.final-summary.v1` | `end` | Summarizes run results and recommends next commands. |
+Lifecycle methods write under `run_methods` in the root `.aascribe_index_meta.json` only. Start methods do not mutate downstream file or folder method input.
 
 The discovery command lists the exact methods available in the current build:
 
@@ -345,7 +342,7 @@ enabled = [
 ]
 ```
 
-For current v2.1 plans, `[methods].enabled` is the only required section. `base` metadata always runs; including `"base"` is optional and usually unnecessary.
+For current plans, `[methods].enabled` is the only required section. `base` metadata always runs; including `"base"` is optional and usually unnecessary.
 
 Per-method tables use quoted keys when the method id contains dots:
 
@@ -381,7 +378,7 @@ If validation reports an unknown method, run `aascribe --format json index metho
 
 If the user wants no LLM usage, omit `"summary"` from `[methods].enabled`.
 
-The AI should generate the plan file only. It should not run custom external programs while drafting a plan. External execution is future-facing and not available in v2.1.
+The AI should generate the plan file only. It should not run custom external programs while drafting a plan. External execution is future-facing and not available in this build.
 
 ## External Methods
 
@@ -424,6 +421,7 @@ aascribe index . --metadata-method summary
 aascribe index . --metadata-method base  # accepted no-op; base always runs
 aascribe index . --metadata-method builtin.classify.v1
 aascribe index . --metadata-method builtin.classify.v1 --metadata-method builtin.retrieval.v1 --metadata-method builtin.routing.v1
+aascribe index . --metadata-method builtin.run-context.v1 --metadata-method builtin.run-report.v1
 aascribe index methods
 aascribe index plan validate ./aascribe.index.toml
 aascribe index . --index-plan ./aascribe.index.toml
@@ -436,8 +434,9 @@ Currently accepted method ids:
 - `builtin.classify.v1`
 - `builtin.retrieval.v1`
 - `builtin.routing.v1`
+- `builtin.run-context.v1`
+- `builtin.run-report.v1`
 
 Planned behavior adds:
 
-- start and end lifecycle method stages
 - explicit custom/external method definitions

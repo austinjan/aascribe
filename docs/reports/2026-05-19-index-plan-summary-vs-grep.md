@@ -5,24 +5,26 @@
 - **Build command:** `make all`
 - **Tester:** manual session, help-driven (no source code read)
 - **Test folder:** `/tmp/aascribe-km-test` (copy of `~/code/km`), indexed subtree: `./coding` — 7 markdown files, 4 folders
-- **Rounds:** R1 = heuristic plan; R2a = +`summary`; R2b = +`builtin.retrieval.v1`; R3 = R2b plan, iterated extractor
+- **Rounds:** R1 = heuristic plan; R2a = +`summary`; R2b = +`builtin.retrieval.v1`; R3 = R2b plan, iterated extractor; **R4 = test new `aascribe index review` workflow**
 
 ## TL;DR
 
 Retrieval performance on a fixed **10-query benchmark** (semantic intents over a corpus of 7 docs):
 
-| Channel | R1 (heuristic) | R2a (summary) | R2b (+retrieval) | R3 (iterated) |
-|---|---:|---:|---:|---:|
-| `rg` baseline | 4 | 4 | 4 | 4 |
-| metadata channel | 1 | 3 | 6 | **7** |
-| Wall time per run | ~5 ms | ~9 s | ~12 s | ~10 s |
-| LLM tokens | 0 | 5,577 | 5,976 | 6,268 |
+| Channel | R1 (heuristic) | R2a (summary) | R2b (+retrieval) | R3 (iterated) | R4 (review workflow) |
+|---|---:|---:|---:|---:|---:|
+| `rg` baseline | 4 | 4 | 4 | 4 | 4 |
+| metadata channel | 1 | 3 | 6 | 7 | **7 (no change)** |
+| Wall time per index run | ~5 ms | ~9 s | ~12 s | ~10 s | ~9 s |
+| LLM tokens per index run | 0 | 5,577 | 5,976 | 6,268 | 5,570 |
 
-**Headline:** With `builtin.retrieval.v1` enabled and iterated (R3), substring search over the metadata file is strictly stronger than `rg` on this corpus (7 vs 4 hits across the 10 queries), closes all three failure modes diagnosed in R1, and costs about 5% more tokens than summary-only.
+**Headline through R3:** With `builtin.retrieval.v1` enabled and iterated (R3), substring search over the metadata file is strictly stronger than `rg` on this corpus (7 vs 4 hits across the 10 queries), closes all three failure modes diagnosed in R1, and costs about 5% more tokens than summary-only.
 
-**Outstanding bugs** (filed below): code-snippet leakage and bogus `Example`/`Note` aliases (both from the same bullet-prefix parser issue); `likely_queries` are diversified in form but still 100% template-driven for tool-list files; `aascribe map` is referenced in help but not implemented.
+**R4 finding (workflow integration bug):** The new `aascribe index review` workflow operates correctly at every step (review → propose → patch → status → restore) and **the auditor correctly flagged 2 of 3 known bugs**. However, the patch writes the new prompt to `prompts/retrieval/generate.v1.md` on disk, while the `index` command uses an embedded prompt at build time and **ignores the on-disk file**. The full loop therefore has no functional effect on retrieval quality: post-patch re-indexing emits identical metadata to R3. Verified by hiding the workspace prompt file and observing no behavior change.
 
-**Recommended next fix:** patch the entity parser's leading-token detection to treat Markdown section labels (`Example`, `Note`, `Warning`, `Tip`) as labels, not entity names. Single change cleans up two of three remaining bugs.
+**Outstanding bugs** (filed below): code-snippet leakage and bogus `Example`/`Note` aliases (both from the same bullet-prefix parser issue); `likely_queries` are diversified in form but still 100% template-driven for tool-list files; `aascribe map` is referenced in help but not implemented; **(new in R4) `patch` does not affect indexing** because prompts are embedded; **(new in R4) `restore` reverts metadata but does not remove prompt files created after the checkpoint**.
+
+**Recommended next fix:** make the indexer read prompts from disk (workspace `prompts/` then fall back to embedded default) so the review workflow's patch can actually take effect. This is now higher priority than the entity-parser leading-token fix, because without it the entire `review → propose → patch` loop is non-functional.
 
 ## Goal
 
@@ -518,3 +520,202 @@ Recommended next iteration:
 - Method discovery via `aascribe --format json index methods` returns a stable shape suitable for agent consumption.
 
 These are the load-bearing trust properties for an agent-facing index feature, and they held cleanly across three rounds of method iteration.
+
+---
+
+## Round 4 — `aascribe index review` workflow
+
+Between Round 3 and Round 4 the team added a brand-new sub-command family: `aascribe index review` with six verbs (`review`, `propose`, `patch`, `status`, `accept`, `restore`). Discovered via `aascribe index --help` (the Usage block listed the new sub-verbs). The workflow is checkpoint-first and reversible: only `patch` and `restore` mutate files.
+
+### Step 16 — Discover the new command
+
+```
+make all
+aascribe index --help
+```
+
+The Usage section now lists:
+
+```
+aascribe index review <path> [--method <method>]
+aascribe index review propose <review-json>
+aascribe index review patch <proposal-json>
+aascribe index review status <checkpoint-id>
+aascribe index review accept <checkpoint-id>
+aascribe index review restore <checkpoint-id>
+```
+
+`aascribe index review --help` gives a clear agent workflow contract: every sub-command emits `status`, `writes`, `artifacts`, `next`; mutation is gated behind `patch` and `restore` only.
+
+### Step 17 — Run review on R3 metadata
+
+```
+aascribe index review ./coding --method builtin.retrieval.v1
+# -> checkpoint_id: index-review-20260519T035018Z
+# -> review_report_json: data/memory/report/2026-05-19-035018-retrieval-review.json
+# -> review_report_markdown: same path .md
+```
+
+Run time **3 ms** — pure inspection, no LLM call.
+
+Findings emitted:
+
+| Severity | Kind | Path | My R3 bug # |
+|---|---|---|---|
+| high | `label_as_entity` (`Example`) | `coding/claude-code/CLAUDE.md` | #3 |
+| high | `label_as_entity` (`Note`) | `coding/claude-code/CLAUDE.md` | #3 |
+| medium | `code_snippet_leakage` | `coding/claude-code/CLAUDE.md` | #1 |
+
+**Auditor verdict:** caught bugs #1 and #3 correctly. Did **not** flag bug #5 (templated `likely_queries`), and only scanned `CLAUDE.md` despite `tools/README.md` having the same templated-query issue. Narrow but accurate on what it did flag.
+
+The checkpoint directory `data/memory/index-review/checkpoints/index-review-20260519T035018Z/` snapshotted all 5 metadata files plus a `state.json`, ready for rollback.
+
+### Step 18 — Run propose
+
+```
+aascribe index review propose <review-json>
+# -> 1 ms, no LLM call
+# -> prompt_proposal_json + prompt_proposal_markdown
+```
+
+The proposed prompt:
+
+```
+- Treat Markdown labels such as Example, Note, Warning, Tip, and Usage as context labels, not entities.
+- Do not emit shell commands, code examples, Markdown link syntax, or long snippets as retrieval terms.
+- Prefer a small number of natural likely_queries over many formulaic templates.
+- aliases[].from must refer to a real entity name unless the alias explicitly expands an acronym.
+```
+
+Plus a new entity schema requiring `source_quote` per entity, and a new `warnings` field at the top level.
+
+**Notable:** the proposal includes a rule for **bug #5** (`Prefer a small number of natural likely_queries…`) *even though the auditor did not flag it*. The proposer goes beyond the audit findings. Good defensive design.
+
+`propose` is also instant (1 ms) — **deterministic, no LLM call**. The proposer is a rule-based mapping from finding kind → prompt rule.
+
+### Step 19 — Apply the patch
+
+```
+aascribe index review patch <proposal-json>
+# -> 1 ms
+# -> prompt_file: prompts/retrieval/generate.v1.md
+```
+
+Patch wrote `/tmp/aascribe-km-test/prompts/retrieval/generate.v1.md` (workspace-relative). Confirmed the repo's own `prompts/retrieval/generate.v1.md` (different timestamp, in `/Users/macmini-au/code/aascribe/prompts/...`) was untouched. **Workspace-scoped patch — good isolation property.**
+
+### Step 20 — Re-index with patched prompt
+
+```
+aascribe index --refresh --index-plan ./aascribe.index.toml ./coding
+```
+
+- Wall time **9 s** (down from 10 s).
+- Tokens **5,570** (down from 6,268 — **-11%**).
+
+Token reduction is consistent with the prompt's "small number of natural queries" rule producing less output.
+
+### Step 21 — Re-run 10-query benchmark + bug recheck
+
+| Query | rg | R3 | R4 |
+|---|---:|---:|---:|
+| Linux | 0 | 1 | 1 |
+| Windows Subsystem | 0 | 1 | 1 |
+| WSL | 1 | 1 | 1 |
+| shell prompt | 2 | 2 | 2 |
+| HTTP client | 2 | 2 | 2 |
+| directory navigation | 0 | 2 | 2 |
+| fuzzy jump | 0 | 0 | 0 |
+| modern Unix tools | 0 | 0 | 0 |
+| tab completion | 0 | 0 | 0 |
+| API client | 0 | 2 | 2 |
+| **Total** | **4** | **7** | **7** |
+
+Score is **identical to R3**. Bug recheck:
+
+| Bug | R3 | R4 |
+|---|---|---|
+| #1 code-snippet leak (`` bat file.py` instead of `cat file.py ``) | present | **still present** |
+| #3 bogus aliases (`Example → API client`, `Note → ...`) | present | **still present** |
+| #5 templated `likely_queries` (24 of 24 formulaic for `CLAUDE.md` and `tools/README.md`) | present | **still present** |
+
+### Step 22 — Diagnose why R4 metadata didn't change
+
+The R4 entity schema is `{name, type, role}` — but the new prompt explicitly required `{name, type, role, source_quote}`. **The indexer is not using the patched prompt.**
+
+To confirm, hid the workspace prompt file and re-indexed:
+
+```
+mv /tmp/aascribe-km-test/prompts/retrieval/generate.v1.md{,.HIDDEN}
+aascribe index --refresh ... ./coding/claude-code
+# -> success, produced identical metadata
+mv /tmp/aascribe-km-test/prompts/retrieval/generate.v1.md{.HIDDEN,}
+```
+
+The indexer succeeded with the workspace prompt file removed. **Prompts are embedded in the binary** (presumably via Go `embed`) and the on-disk file is never consulted at runtime.
+
+This is a **workflow integration bug**: `review`, `propose`, `patch`, `status`, and `restore` all work as advertised, but the loop they orchestrate has no functional effect on the indexer because `index` ignores the patched file.
+
+### Step 23 — Verify and restore
+
+Verification re-review reported the same 3 findings (expected, since metadata was unchanged):
+
+```
+aascribe index review ./coding --method builtin.retrieval.v1
+# -> 3 findings, identical to first run
+```
+
+Restored the original checkpoint to clean up:
+
+```
+aascribe index review restore index-review-20260519T035018Z
+# -> status: restored, duration 2 ms
+```
+
+Post-restore:
+- Metadata `last_updated` = `2026-05-19T03:10:40Z` (R3 timestamp) ✓ restored
+- 10-query benchmark = 7/10 ✓ matches R3
+- Prompt file `/tmp/aascribe-km-test/prompts/retrieval/generate.v1.md` **still on disk with patched content** ✗ — `restore` reverts metadata but does not delete prompt files that were *created* after the checkpoint. Minor secondary issue.
+
+Status check after restore:
+
+```
+aascribe index review status index-review-20260519T035018Z
+# -> state: restored, can: [status]
+```
+
+Checkpoint is correctly marked terminal — only `status` allowed.
+
+### Round 4 verdict
+
+| Component | Outcome |
+|---|---|
+| `review` | ✅ Correctly flagged 2 of 3 known bugs (#1, #3). Missed #5. Only scanned `CLAUDE.md`. |
+| `propose` | ✅ Generated targeted, well-written rules including one for bug #5 the audit missed. Deterministic, fast. |
+| `patch` | ✅ Writes workspace-scoped prompt file cleanly; does not touch the repo source. |
+| `status` | ✅ Correct state transitions (`created` → `restored` → terminal). |
+| `restore` | ⚠️ Reverts metadata correctly but does not delete files created after the checkpoint. |
+| `accept` | ⏸️ Not exercised — restored instead because the patch was non-functional. |
+| **Loop end-to-end effect on retrieval quality** | ❌ **Zero.** Patched prompt is ignored by the indexer (prompts are embedded in the binary). 10-query score is unchanged at 7/10. |
+
+### New issues filed in R4
+
+| # | Severity | Issue |
+|---|---|---|
+| R4-1 | **High** | `index --refresh` does not read the workspace prompt file written by `index review patch`. Prompts are embedded at build time and the on-disk file is unused. The entire review-propose-patch loop has no functional effect on indexing until this is addressed. |
+| R4-2 | Medium | `index review restore` reverts metadata files but does not remove prompt files created between the checkpoint and the restore. After restore, `prompts/retrieval/generate.v1.md` remains on disk with the patched content. |
+| R4-3 | Low | `index review <path>` only scans the file(s) with the most findings — `tools/README.md` has the same templated-query issue as `CLAUDE.md` but was not flagged. Auditor should report findings per file. |
+| R4-4 | Low | The auditor does not check for templated `likely_queries` (bug #5 from R3). The proposer does include a rule for it preventively, but the audit step is the agent's diagnostic — it should detect what the prompt is preventing. |
+| R4-5 | Low | All sub-command-specific `--help` invocations (`propose --help`, `patch --help`, etc.) fall back to the parent `index review --help`. No per-sub help text. |
+
+### Recommended next steps (replacing prior R3 list)
+
+| # | Effort | Expected impact |
+|---|---|---|
+| 1. **Make `index` read prompts from disk first**, fall back to embedded default. Layered: `$STORE/prompts/...` → workspace `./prompts/...` → embedded. This unblocks the whole review workflow. | Medium — touches prompt loading path | **Closes R4-1**. Required for the review workflow to deliver value. Without this, R3 bugs #1, #3, #5 cannot be fixed through the workflow at all. |
+| 2. Patch entity parser leading-token detection so `Example` / `Note` / `Warning` / `Tip` are labels (if the prompt-loading fix lands, this becomes redundant — the new prompt already covers it) | Small if not done at prompt level | **Closes R3 bugs #1 and #3** if the prompt route is rejected. |
+| 3. Extend auditor to flag templated `likely_queries` and scan **all files** in scope (R4-3, R4-4) | Small | Brings audit findings in line with what proposer already guards against |
+| 4. Have `restore` clean up files that did not exist at checkpoint time (R4-2) | Small | Makes restore a true "back to checkpoint" guarantee |
+| 5. Word-order-tolerant matching in metadata consumers | Trivial | Catches `Linux editor setup` / `fuzzy jump` class with no LLM cost |
+| 6. Fix `aascribe map` ghost in `search --help` | Trivial doc fix | Stops misleading agents |
+
+The workflow design itself is sound — checkpoint-first, deterministic propose/patch, explicit `writes` declarations, clean rollback. The only blocker is that the indexer doesn't actually consume what the workflow produces. Single change to fix.

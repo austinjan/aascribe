@@ -220,6 +220,8 @@ func runIndex(storePath string, cmd cli.IndexCommand) (*output.CommandResult, er
 		MaxFileSize:         cmd.MaxFileSize,
 		MetadataMethods:     cmd.EffectiveMetadataMethods(),
 		MethodPrompts:       methodPrompts,
+		IndexPlanPath:       cmd.IndexPlan,
+		IndexPlanDigest:     cmd.IndexPlanDigest,
 		Summarizer:          summarizer,
 		FailureNoticeWriter: os.Stderr,
 	})
@@ -1056,6 +1058,7 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 	if summarizerErr != nil {
 		buildErr = summarizerErr
 	} else {
+		methodPrompts := loadIndexMethodPrompts(storePath, cmd.EffectiveMetadataMethods())
 		result, buildErr = index.Build(index.Options{
 			Context:             ctx,
 			Root:                cmd.Path,
@@ -1067,6 +1070,9 @@ func runOperationRunIndex(storePath, operationID string, cmd cli.IndexCommand) (
 			NoSummary:           noSummary,
 			MaxFileSize:         cmd.MaxFileSize,
 			MetadataMethods:     cmd.EffectiveMetadataMethods(),
+			MethodPrompts:       methodPrompts,
+			IndexPlanPath:       cmd.IndexPlan,
+			IndexPlanDigest:     cmd.IndexPlanDigest,
 			Summarizer:          summarizer,
 			FailureNoticeWriter: io.Discard,
 		})
@@ -1205,22 +1211,57 @@ func runIndexMap(cmd cli.IndexMapCommand) (*output.CommandResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	jsonPayload, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return nil, apperr.Serialization("Failed to serialize map result.")
+	}
 
 	return &output.CommandResult{
-		Data: result,
-		Text: renderMapText(result),
+		Data:              result,
+		Text:              renderMapText(result),
+		PrimaryTextKey:    "text",
+		JSONTransportText: string(jsonPayload),
 	}, nil
 }
 
 func runMap(cmd cli.MapCommand) (*output.CommandResult, error) {
-	result, err := index.BuildMap(cmd.Path)
+	if cmd.RecentModified {
+		result, err := index.BuildRecentModifiedMap(cmd.Path, 20)
+		if err != nil {
+			return nil, err
+		}
+		jsonPayload, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, apperr.Serialization("Failed to serialize recent-modified map result.")
+		}
+		return &output.CommandResult{Data: result, Text: renderRecentModifiedText(result), PrimaryTextKey: "text", JSONTransportText: string(jsonPayload)}, nil
+	}
+	if cmd.ListTags || len(cmd.Tags) > 0 {
+		result, err := index.BuildTagMap(cmd.Path, cmd.Tags)
+		if err != nil {
+			return nil, err
+		}
+		jsonPayload, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, apperr.Serialization("Failed to serialize tag map result.")
+		}
+		return &output.CommandResult{Data: result, Text: renderTagMapText(result), PrimaryTextKey: "text", JSONTransportText: string(jsonPayload)}, nil
+	}
+
+	result, err := index.BuildMapWithOptions(cmd.Path, index.MapOptions{Depth: cmd.Depth, SummaryOnly: cmd.SummaryOnly, MaxFilesPerDir: cmd.MaxFilesPerDir, Full: cmd.Full})
 	if err != nil {
 		return nil, err
 	}
+	jsonPayload, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return nil, apperr.Serialization("Failed to serialize map result.")
+	}
 
 	return &output.CommandResult{
-		Data: result,
-		Text: renderMapText(result),
+		Data:              result,
+		Text:              renderMapText(result),
+		PrimaryTextKey:    "text",
+		JSONTransportText: string(jsonPayload),
 	}, nil
 }
 
@@ -1486,12 +1527,60 @@ func runOperationClean(storePath string, cmd cli.OperationCleanCommand) (*output
 	}, nil
 }
 
+func renderRecentModifiedText(result *index.RecentModifiedResult) string {
+	if result == nil {
+		return ""
+	}
+	lines := []string{fmt.Sprintf("recent_modified: %d files", result.TotalFiles)}
+	for _, file := range result.Files {
+		lines = append(lines, fmt.Sprintf("- %s (%s)", file.Path, file.ModTime))
+	}
+	if result.Truncated {
+		lines = append(lines, "truncated: true", "next: narrow the map path")
+	}
+	if !result.Complete {
+		lines = append(lines, "complete: false")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderTagMapText(result *index.TagMapResult) string {
+	if result == nil {
+		return ""
+	}
+	if result.Mode == "tag_catalog" {
+		lines := []string{fmt.Sprintf("tag_catalog: %d tags", len(result.Tags))}
+		for _, tag := range result.Tags {
+			lines = append(lines, fmt.Sprintf("- %s (%d files)", tag.Tag, tag.FileCount))
+		}
+		if !result.Complete {
+			lines = append(lines, "complete: false")
+		}
+		return strings.Join(lines, "\n")
+	}
+	lines := []string{
+		"tag_query: " + strings.Join(result.Query, ", "),
+		"match: " + result.Match,
+		fmt.Sprintf("files: %d", len(result.Files)),
+	}
+	for _, file := range result.Files {
+		lines = append(lines, "- "+file.Path)
+	}
+	if !result.Complete {
+		lines = append(lines, "complete: false")
+	}
+	return strings.Join(lines, "\n")
+}
+
 func renderMapText(result *index.PathIndexMap) string {
 	if result == nil {
 		return ""
 	}
 	var lines []string
-	lines = append(lines, "usage: map is a routing overview; for precise answers inspect the target file directly or re-run index without --no-summary.")
+	lines = append(lines, "usage: map is a routing overview and routing evidence; inspect source files before precise claims and mutate the index only when explicitly requested.")
+	lines = append(lines, "focused_views: use --tag to list tags, --tag <tag> to find tagged files, or --recent-modified to list recently modified files")
+	lines = append(lines, fmt.Sprintf("ignore_policy: %s (negation_supported=%t; sources=%s)", result.IgnorePolicy.Mode, result.IgnorePolicy.NegationSupported, strings.Join(result.IgnorePolicy.Sources, ",")))
+	lines = append(lines, fmt.Sprintf("projection: %s (depth=%d; summary_only=%t; max_files_per_dir=%d)", result.Projection.Mode, result.Projection.Depth, result.Projection.SummaryOnly, result.Projection.MaxFilesPerDir))
 	if len(result.StateGuide) > 0 {
 		lines = append(lines, "state guide:")
 		keys := make([]string, 0, len(result.StateGuide))
@@ -1514,12 +1603,22 @@ func renderMapText(result *index.PathIndexMap) string {
 		if node.State != "" && node.State != "ready" {
 			line += " [" + node.State + "]"
 		}
+		if node.Freshness != "" && node.Freshness != "fresh" {
+			line += " [freshness=" + node.Freshness + "]"
+		}
 		lines = append(lines, line)
+		for _, issue := range node.Issues {
+			lines = append(lines, indent+"  issue: "+issue.Kind+" "+issue.Path+" - "+issue.Message)
+		}
+		if node.Next != "" {
+			lines = append(lines, indent+"  next: "+node.Next)
+		}
+		for _, omitted := range node.Omitted {
+			lines = append(lines, indent+"  omitted: "+omitted.Reason+" "+omitted.Path)
+			lines = append(lines, indent+"  next: "+omitted.Next)
+		}
 		if node.BriefSummary != "" {
 			lines = append(lines, indent+"  "+"summary: "+node.BriefSummary)
-		}
-		if node.State == "unindexed" {
-			return
 		}
 		for _, file := range node.Files {
 			fileLine := indent + "  " + filepath.Base(file.Path)
@@ -1547,7 +1646,18 @@ func renderSearchText(result *search.Result) string {
 	lines := []string{
 		fmt.Sprintf("search: %q", result.Query),
 		"engine: " + result.Engine,
+		"query_mode: " + result.QueryMode,
+		"match_unit: " + result.MatchUnit,
+		"column_unit: " + result.ColumnUnit,
 		fmt.Sprintf("matches: %d", result.MatchCnt),
+		fmt.Sprintf("returned_match_lines: %d", result.ReturnedMatchLines),
+		fmt.Sprintf("complete: %t", result.Complete),
+	}
+	for _, reason := range result.PartialReasons {
+		lines = append(lines, fmt.Sprintf("partial: %s %s - %s", reason.Kind, reason.Path, reason.Message))
+	}
+	for _, exclusion := range result.Exclusions {
+		lines = append(lines, fmt.Sprintf("excluded: %s %s", exclusion.Kind, exclusion.Path))
 	}
 	for _, match := range result.Matches {
 		location := fmt.Sprintf("%s:%d", match.Path, match.Line)

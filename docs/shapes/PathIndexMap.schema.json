@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aascribe://shapes/PathIndexMap",
+  "title": "PathIndexMap",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string" },
+        "path": { "type": "string" },
+        "message": { "type": "string" }
+      },
+      "required": ["kind", "path", "message"]
+    },
+    "omission": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reason": { "type": "string", "enum": ["depth_limit", "file_limit", "summary_only"] },
+        "path": { "type": "string" },
+        "next": { "type": "string" }
+      },
+      "required": ["reason", "path", "next"]
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "file_type": { "type": "string" },
+        "summary": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["path"]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "state": { "type": "string", "enum": ["ready", "dirty", "unindexed", "corrupt", "unreadable"] },
+        "freshness": { "type": "string", "enum": ["fresh", "stale", "unknown"] },
+        "freshness_checked": { "type": "boolean" },
+        "partial": { "type": "boolean" },
+        "issues": { "type": "array", "items": { "$ref": "#/$defs/issue" } },
+        "next": { "type": "string" },
+        "omitted": { "type": "array", "items": { "$ref": "#/$defs/omission" } },
+        "folder_description": { "type": "string" },
+        "brief_summary": { "type": "string" },
+        "stats": { "type": "object" },
+        "files": { "type": "array", "items": { "$ref": "#/$defs/file" } },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
+      },
+      "required": ["path", "state", "freshness", "freshness_checked", "partial", "issues"]
+    }
+  },
+  "properties": {
+    "root": { "type": "string" },
+    "state_guide": { "type": "object", "additionalProperties": { "type": "string" } },
+    "ignore_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "const": "blacklist" },
+        "negation_supported": { "type": "boolean", "const": false },
+        "sources": { "type": "array", "items": { "type": "string", "enum": [".gitignore", ".aaignore"] } }
+      },
+      "required": ["mode", "negation_supported", "sources"]
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["bounded", "full"] },
+        "depth": { "type": "integer", "minimum": -1 },
+        "summary_only": { "type": "boolean" },
+        "max_files_per_dir": { "type": "integer", "minimum": -1 }
+      },
+      "required": ["mode", "depth", "summary_only", "max_files_per_dir"]
+    },
+    "map": { "$ref": "#/$defs/node" }
+  },
+  "required": ["root", "state_guide", "ignore_policy", "projection", "map"]
+}

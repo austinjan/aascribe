@@ -120,6 +120,9 @@ func normalizedStatus(err error) int {
 	if appErr, ok := err.(*apperr.Error); ok {
 		return appErr.Status.Code()
 	}
+	if provider, ok := err.(interface{ AppError() *apperr.Error }); ok {
+		return provider.AppError().Status.Code()
+	}
 	return apperr.ExitGeneralRuntimeError.Code()
 }
 

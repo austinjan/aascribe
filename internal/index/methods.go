@@ -12,11 +12,13 @@ import (
 )
 
 const (
-	MethodBase        = "base"
-	MethodSummary     = "summary"
-	MethodClassifyV1  = "builtin.classify.v1"
-	MethodRetrievalV1 = "builtin.retrieval.v1"
-	MethodRoutingV1   = "builtin.routing.v1"
+	MethodBase         = "base"
+	MethodSummary      = "summary"
+	MethodClassifyV1   = "builtin.classify.v1"
+	MethodRetrievalV1  = "builtin.retrieval.v1"
+	MethodRoutingV1    = "builtin.routing.v1"
+	MethodRunContextV1 = "builtin.run-context.v1"
+	MethodRunReportV1  = "builtin.run-report.v1"
 )
 
 type MethodStage string
@@ -77,6 +79,12 @@ type FolderMethod interface {
 	BuildFolder(ctx context.Context, input FolderMethodInput) (MethodFields, error)
 }
 
+type LifecycleMethod interface {
+	Method
+	Stage() MethodStage
+	Run(ctx context.Context, input LifecycleInput) (MethodFields, error)
+}
+
 type FileMethodInput struct {
 	Path        string `json:"path"`
 	FileName    string `json:"file_name"`
@@ -101,16 +109,34 @@ type FolderMethodInput struct {
 	Children []Metadata     `json:"children,omitempty"`
 }
 
+type LifecycleInput struct {
+	Stage           MethodStage      `json:"stage"`
+	Root            string           `json:"root"`
+	Depth           int              `json:"depth"`
+	Include         []string         `json:"include,omitempty"`
+	Exclude         []string         `json:"exclude,omitempty"`
+	Refresh         bool             `json:"refresh"`
+	NoSummary       bool             `json:"no_summary"`
+	MaxFileSize     int64            `json:"max_file_size"`
+	EnabledMethods  []string         `json:"enabled_methods,omitempty"`
+	IndexPlanPath   string           `json:"index_plan_path,omitempty"`
+	IndexPlanDigest string           `json:"index_plan_digest,omitempty"`
+	Tree            *IndexedPathNode `json:"tree,omitempty"`
+	Report          *RunReport       `json:"report,omitempty"`
+}
+
 type methodRegistry struct {
-	fileMethods   map[string]FileMethod
-	folderMethods map[string]FolderMethod
-	descriptors   map[string]MethodDescriptor
+	fileMethods      map[string]FileMethod
+	folderMethods    map[string]FolderMethod
+	lifecycleMethods map[string]LifecycleMethod
+	descriptors      map[string]MethodDescriptor
 }
 
 func defaultMethodRegistry() methodRegistry {
 	reg := methodRegistry{
-		fileMethods:   map[string]FileMethod{},
-		folderMethods: map[string]FolderMethod{},
+		fileMethods:      map[string]FileMethod{},
+		folderMethods:    map[string]FolderMethod{},
+		lifecycleMethods: map[string]LifecycleMethod{},
 		descriptors: map[string]MethodDescriptor{
 			MethodBase: {
 				ID:                MethodBase,
@@ -141,6 +167,8 @@ func defaultMethodRegistry() methodRegistry {
 	reg.addFile(classifyMethodV1{})
 	reg.addFile(retrievalMethodV1{})
 	reg.addFolder(routingMethodV1{})
+	reg.addLifecycle(runContextMethodV1{})
+	reg.addLifecycle(runReportMethodV1{})
 	return reg
 }
 
@@ -151,6 +179,11 @@ func (r methodRegistry) addFile(method FileMethod) {
 
 func (r methodRegistry) addFolder(method FolderMethod) {
 	r.folderMethods[method.ID()] = method
+	r.descriptors[method.ID()] = method.Describe()
+}
+
+func (r methodRegistry) addLifecycle(method LifecycleMethod) {
+	r.lifecycleMethods[method.ID()] = method
 	r.descriptors[method.ID()] = method.Describe()
 }
 
@@ -218,6 +251,15 @@ func stableInputHash(input any, method Method) string {
 		fileInput.Text = ""
 		fileInput.Prompt.Text = ""
 		hashInput = fileInput
+	}
+	if lifecycleInput, ok := input.(LifecycleInput); ok {
+		if lifecycleInput.Report != nil {
+			report := *lifecycleInput.Report
+			report.StartedAt = ""
+			report.FinishedAt = ""
+			lifecycleInput.Report = &report
+		}
+		hashInput = lifecycleInput
 	}
 	payload := map[string]any{
 		"input":       hashInput,
@@ -396,6 +438,97 @@ func (m routingMethodV1) BuildFolder(ctx context.Context, input FolderMethodInpu
 		"direct_uncategorized":   uncategorized,
 		"routing_method_version": "builtin.routing.v1",
 	}, nil
+}
+
+type runContextMethodV1 struct{}
+
+func (runContextMethodV1) ID() string { return MethodRunContextV1 }
+
+func (runContextMethodV1) Fingerprint() string { return "builtin.run-context.v1:deterministic:1" }
+
+func (runContextMethodV1) Stage() MethodStage { return MethodStageStart }
+
+func (runContextMethodV1) Describe() MethodDescriptor {
+	return MethodDescriptor{
+		ID:                MethodRunContextV1,
+		Stage:             MethodStageStart,
+		Scope:             "run",
+		Required:          false,
+		DefaultEnabled:    false,
+		AlwaysEnabled:     false,
+		RequiresSummary:   false,
+		SupportsNoSummary: true,
+		Description:       "Records stable run context at index start without mutating downstream file or folder inputs.",
+		Purpose:           "run_context",
+	}
+}
+
+func (m runContextMethodV1) Run(ctx context.Context, input LifecycleInput) (MethodFields, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return MethodFields{
+		"root":              input.Root,
+		"depth":             input.Depth,
+		"include":           append([]string(nil), input.Include...),
+		"exclude":           append([]string(nil), input.Exclude...),
+		"refresh":           input.Refresh,
+		"no_summary":        input.NoSummary,
+		"max_file_size":     input.MaxFileSize,
+		"enabled_methods":   append([]string(nil), input.EnabledMethods...),
+		"index_plan_path":   input.IndexPlanPath,
+		"index_plan_digest": input.IndexPlanDigest,
+	}, nil
+}
+
+type runReportMethodV1 struct{}
+
+func (runReportMethodV1) ID() string { return MethodRunReportV1 }
+
+func (runReportMethodV1) Fingerprint() string { return "builtin.run-report.v1:deterministic:1" }
+
+func (runReportMethodV1) Stage() MethodStage { return MethodStageEnd }
+
+func (runReportMethodV1) Describe() MethodDescriptor {
+	return MethodDescriptor{
+		ID:                MethodRunReportV1,
+		Stage:             MethodStageEnd,
+		Scope:             "run",
+		Required:          false,
+		DefaultEnabled:    false,
+		AlwaysEnabled:     false,
+		RequiresSummary:   false,
+		SupportsNoSummary: true,
+		Description:       "Records final run aggregate metadata after index traversal completes.",
+		Purpose:           "run_report",
+	}
+}
+
+func (m runReportMethodV1) Run(ctx context.Context, input LifecycleInput) (MethodFields, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	fields := MethodFields{
+		"root":              input.Root,
+		"enabled_methods":   append([]string(nil), input.EnabledMethods...),
+		"index_plan_path":   input.IndexPlanPath,
+		"index_plan_digest": input.IndexPlanDigest,
+	}
+	if input.Tree != nil {
+		fields["root_node_path"] = input.Tree.Path
+		fields["root_child_count"] = len(input.Tree.Children)
+	}
+	if input.Report != nil {
+		fields["total_discovered_files"] = input.Report.TotalDiscoveredFiles
+		fields["summarized_files"] = input.Report.SummarizedFiles
+		fields["unchanged_skipped_files"] = input.Report.UnchangedSkippedFiles
+		fields["not_indexed_files"] = input.Report.NotIndexedFiles
+		fields["failed_files"] = input.Report.FailedFiles
+		fields["metadata_files"] = input.Report.MetadataFiles
+		fields["warnings"] = len(input.Report.Warnings)
+		fields["method_status_counts"] = input.Report.MethodStatusCounts
+	}
+	return fields, nil
 }
 
 func classifyFile(input FileMethodInput) (string, float64, string) {

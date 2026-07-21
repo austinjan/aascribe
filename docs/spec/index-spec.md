@@ -52,7 +52,7 @@ aascribe index review restore <checkpoint-id>
 | `--async`         | bool       | `false`     | Start indexing as a persisted operation and return `OperationAccepted`.   |
 | `--refresh`       | bool       | `false`     | Reserved for incremental re-indexing. Accepted but not yet consumed.     |
 | `--no-summary`    | bool       | `false`     | Skip all summarization. Files are still walked, hashed, and recorded.    |
-| `--metadata-method` | string (×N) | default set | Select explicit metadata methods. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.retrieval.v1`, `builtin.routing.v1`. |
+| `--metadata-method` | string (×N) | default set | Select explicit metadata methods. Current methods: `base`, `summary`, `builtin.classify.v1`, `builtin.retrieval.v1`, `builtin.routing.v1`, `builtin.run-context.v1`, `builtin.run-report.v1`. |
 | `--no-metadata-methods` | bool | `false` | Disable optional/default methods beyond required base metadata. |
 | `--index-plan` | path | off | Read an `index-plan-v1` TOML file and use `[methods].enabled` as the method selection. |
 | `--max-file-size` | int64      | `1_048_576` | Byte ceiling for summarization. `0` is valid; negative is rejected.      |
@@ -68,6 +68,8 @@ Metadata method selection:
 - `builtin.classify.v1` is an optional deterministic file method. It does not require summary and can run from path/file-type signals under `--no-summary`.
 - `builtin.retrieval.v1` is an optional deterministic file method. It does not require summary and emits LLM-facing retrieval terms, aliases, entities, and likely queries from bounded file text plus path/summary signals.
 - `builtin.routing.v1` is an optional deterministic folder method. It aggregates child classification fields into category counts, tag counts, dominant category, low-confidence counts, and uncategorized counts.
+- `builtin.run-context.v1` is an optional start lifecycle method. It writes root-only run context metadata under `run_methods` and does not mutate downstream file or folder method input.
+- `builtin.run-report.v1` is an optional end lifecycle method. It writes root-only final run aggregates under `run_methods` after traversal completes.
 - When one or more `--metadata-method` flags are provided, `index` uses the requested method set plus required `base`.
 - `--metadata-method` and `--no-metadata-methods` are mutually exclusive.
 - `--index-plan` is mutually exclusive with `--metadata-method` and `--no-metadata-methods`.

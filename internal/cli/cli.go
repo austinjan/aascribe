@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 type Format string
 
@@ -247,7 +247,14 @@ type IndexMapCommand struct {
 func (c IndexMapCommand) Name() string { return "index" }
 
 type MapCommand struct {
-	Path string
+	Path           string
+	Depth          int
+	SummaryOnly    bool
+	MaxFilesPerDir int
+	Full           bool
+	ListTags       bool
+	Tags           []string
+	RecentModified bool
 }
 
 func (c MapCommand) Name() string { return "map" }
@@ -830,7 +837,7 @@ Behavior:
   Detect text files from file content instead of filename extension.
   Write .aascribe_index_meta.json in each indexed folder with local-only metadata for that folder.
   With no metadata method flags, use the default methods: base metadata plus summary.
-  Supported methods in this build are base, summary, builtin.classify.v1, builtin.retrieval.v1, and builtin.routing.v1. Base metadata always runs.
+  Supported methods in this build are base, summary, builtin.classify.v1, builtin.retrieval.v1, builtin.routing.v1, builtin.run-context.v1, and builtin.run-report.v1. Base metadata always runs.
   Use --index-plan to run built-in methods listed in an index-plan-v1 TOML file.
   Use index methods to list method descriptions in text or JSON form.
   Use index plan validate to check an index-plan-v1 TOML file without running index.
@@ -959,7 +966,8 @@ Rules:
   - "builtin.classify.v1" performs deterministic file classification.
   - "builtin.retrieval.v1" emits LLM-facing retrieval terms, aliases, entities, and likely queries from bounded file text.
   - "builtin.routing.v1" aggregates folder routing metadata.
-  - Do not enable lifecycle start/end methods until they appear in aascribe --format json index methods.
+  - "builtin.run-context.v1" records root-only start lifecycle metadata.
+  - "builtin.run-report.v1" records root-only end lifecycle aggregates.
   - Custom/external method descriptors are future-facing and are not executable in this build.
 
 Examples:
@@ -970,7 +978,9 @@ Examples:
     enabled = [
       "builtin.classify.v1",
       "builtin.retrieval.v1",
-      "builtin.routing.v1"
+      "builtin.routing.v1",
+      "builtin.run-context.v1",
+      "builtin.run-report.v1"
     ]
 
   Summary-backed repo understanding:
@@ -1003,7 +1013,7 @@ Checks:
   - duplicate enabled ids are rejected
   - custom ids do not conflict with built-ins
   - custom descriptors are structurally valid
-  - custom/external method execution is still disabled in v2.1
+  - custom/external method execution is still disabled in this build
 
 Agent Notes:
   Validation is mandatory before running an index plan.
@@ -1114,25 +1124,40 @@ Purpose:
   Help an agent inspect which folders are indexed, stale, missing metadata, or ready for routing before doing exact search or opening files.
 
 Usage:
-  aascribe map <path>
-  aascribe index map <path>
+  aascribe map <path> [--depth <n>] [--summary-only] [--max-files-per-dir <n>] [--full]
+  aascribe map <path> --tag
+  aascribe map <path> --tag <tag> [--tag <tag> ...]
+  aascribe map <path> --recent-modified
+  aascribe index map <path> [same flags]
+
+Focused views:
+  Bare --tag lists available tags with file counts.
+  --tag <tag> lists related files; repeat it to require all supplied tags.
+  --recent-modified lists the 20 most recently modified files visible to the map, newest first.
+  Focused views return compact output instead of the normal hierarchy.
 
 Agent Notes:
-  Use map after indexing to route through existing .aascribe_index_meta.json files.
-  Use index when metadata is missing or stale.
+  Repository questions are read-only unless the caller explicitly requests indexing or refresh.
+  Use existing trustworthy metadata for broad semantic routing; otherwise use read-only filesystem discovery.
+  State reports metadata access. Trust summaries only with checked-fresh, non-partial evidence.
+  Default output is bounded (depth 2, 20 files per directory); omissions include exact continuations.
+  Use --full only when complete traversal is explicitly required.
   Use search after map when you need exact line-level confirmation.
 
 Examples:
   aascribe map .
-  aascribe map ./internal
-  aascribe index map ./internal
+  aascribe map ./internal --depth 1 --summary-only
+  aascribe map ./internal --tag
+  aascribe map ./internal --tag docs --tag api
+  aascribe map ./internal --recent-modified
+  aascribe map ./internal --full
 `)
 	case "search":
 		return strings.TrimSpace(`
-aascribe search - exact text search with line-level matches
+aascribe search - exact text search with matching-line results
 
 Purpose:
-  Confirm exact mentions after semantic routing. This command prefers system search tools in this order: rg, git grep, grep, then a built-in fallback.
+  Search a known exact term first, or confirm candidates after semantic routing.
 
 Usage:
   aascribe search <query> [path] [--engine auto|rg|git-grep|grep|builtin] [--ignore-case] [--fixed-strings] [--glob <pattern>] [--max-count <n>]
@@ -1145,7 +1170,10 @@ Examples:
 
 Notes:
   Use aascribe map for semantic routing.
-  Use aascribe search for exact confirmation, line numbers, and every occurrence within the selected scope.
+  Results represent matching lines, not individual occurrences.
+  Fixed-string auto mode tries rg, git grep, grep, then builtin with one shared scope.
+  Regex auto mode uses rg then builtin; grep and git-grep regex requests are unsupported.
+  Absence claims require complete: true, truncated: false, and an adequate declared scope.
 `)
 	case "describe":
 		return strings.TrimSpace(`
@@ -1927,15 +1955,52 @@ func parseIndexEval(args []string) (Command, error) {
 
 func parseMap(args []string) (Command, error) {
 	fs := newFlagSet("index map")
-	var cmd MapCommand
-	if err := parseFlags(fs, args); err != nil {
+	cmd := MapCommand{Depth: 2, MaxFilesPerDir: 20}
+	var tags stringSlice
+	fs.IntVar(&cmd.Depth, "depth", 2, "")
+	fs.BoolVar(&cmd.SummaryOnly, "summary-only", false, "")
+	fs.IntVar(&cmd.MaxFilesPerDir, "max-files-per-dir", 20, "")
+	fs.BoolVar(&cmd.Full, "full", false, "")
+	fs.BoolVar(&cmd.ListTags, "tag-list", false, "")
+	fs.Var(&tags, "tag", "")
+	fs.BoolVar(&cmd.RecentModified, "recent-modified", false, "")
+	if err := parseFlags(fs, normalizeMapTagArgs(args)); err != nil {
 		return nil, err
 	}
+	cmd.Tags = tags
 	if len(fs.Args()) != 1 {
 		return nil, newParseError(ParseErrorMissingRequiredArg, "map", "path", "map requires exactly one path argument.")
 	}
+	if cmd.Depth < 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "map", "--depth", "Invalid value for --depth: %d.", cmd.Depth)
+	}
+	if cmd.MaxFilesPerDir < 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "map", "--max-files-per-dir", "Invalid value for --max-files-per-dir: %d.", cmd.MaxFilesPerDir)
+	}
+	if cmd.ListTags && len(cmd.Tags) > 0 {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "map", "--tag", "Use bare --tag to list tags or --tag <tag> to find files, not both.")
+	}
+	if cmd.RecentModified && (cmd.ListTags || len(cmd.Tags) > 0) {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "map", "--recent-modified", "--recent-modified cannot be combined with --tag.")
+	}
+	if (cmd.ListTags || len(cmd.Tags) > 0 || cmd.RecentModified) && (cmd.Depth != 2 || cmd.SummaryOnly || cmd.MaxFilesPerDir != 20 || cmd.Full) {
+		return nil, newParseError(ParseErrorInvalidFlagValue, "map", "projection flags", "--depth, --summary-only, --max-files-per-dir, and --full cannot be combined with --tag or --recent-modified.")
+	}
 	cmd.Path = fs.Args()[0]
 	return cmd, nil
+}
+
+func normalizeMapTagArgs(args []string) []string {
+	normalized := append([]string(nil), args...)
+	for i, arg := range normalized {
+		if arg != "--tag" && arg != "-tag" {
+			continue
+		}
+		if i+1 == len(normalized) || strings.HasPrefix(normalized[i+1], "-") {
+			normalized[i] = "--tag-list"
+		}
+	}
+	return normalized
 }
 
 func parseSearch(args []string) (Command, error) {
@@ -1963,7 +2028,13 @@ func parseSearch(args []string) (Command, error) {
 	if cmd.MaxCount < 0 {
 		return nil, newParseError(ParseErrorInvalidFlagValue, "search", "--max-count", "Invalid value for --max-count: %d.", cmd.MaxCount)
 	}
+	if !cmd.FixedStrings && (cmd.Engine == "grep" || cmd.Engine == "git-grep") {
+		return nil, newUnsupportedQueryError("search", "--engine", "Regex mode is unsupported by engine %s; use rg, builtin, auto, or --fixed-strings.", cmd.Engine)
+	}
 	cmd.Query = positionals[0]
+	if cmd.Query == "" {
+		return nil, newParseError(ParseErrorMissingRequiredArg, "search", "query", "search query must not be empty.")
+	}
 	if len(positionals) == 2 {
 		cmd.Path = positionals[1]
 	}

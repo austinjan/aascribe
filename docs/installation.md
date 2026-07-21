@@ -182,6 +182,8 @@ After installation, check:
 <target-root>/skills/indexing-folder/bin/aascribe --version
 ```
 
+The retrieval-contract bundle built from this source release reports `0.2.0`.
+
 Then use the skill's normal workflow from the target repository:
 
 ```bash

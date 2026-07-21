@@ -32,6 +32,7 @@ This directory is the checked-in source of truth for `aascribe` command `OutputS
 - `OperationResult.schema.json`
 - `OperationStatus.schema.json`
 - `PathIndexTree.schema.json`
+- `PathIndexMap.schema.json`
 - `RememberResult.schema.json`
 - `SearchResult.schema.json`
 - `StoreInitResult.schema.json`

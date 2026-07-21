@@ -36,6 +36,8 @@ type Options struct {
 	MaxFileSize         int64
 	MetadataMethods     []string
 	MethodPrompts       map[string]Prompt
+	IndexPlanPath       string
+	IndexPlanDigest     string
 	Summarizer          SummarizerFunc
 	FailureThreshold    int
 	FailureNoticeWriter io.Writer
@@ -103,14 +105,42 @@ type EvalFile struct {
 }
 
 type PathIndexMap struct {
-	Root       string            `json:"root"`
-	StateGuide map[string]string `json:"state_guide,omitempty"`
-	Map        IndexMapNode      `json:"map"`
+	Root         string            `json:"root"`
+	StateGuide   map[string]string `json:"state_guide,omitempty"`
+	IgnorePolicy IgnorePolicy      `json:"ignore_policy"`
+	Projection   MapProjection     `json:"projection"`
+	Map          IndexMapNode      `json:"map"`
+}
+
+type IgnorePolicy struct {
+	Mode              string   `json:"mode"`
+	NegationSupported bool     `json:"negation_supported"`
+	Sources           []string `json:"sources"`
+}
+
+type MapOptions struct {
+	Depth          int
+	SummaryOnly    bool
+	MaxFilesPerDir int
+	Full           bool
+}
+
+type MapProjection struct {
+	Mode           string `json:"mode"`
+	Depth          int    `json:"depth"`
+	SummaryOnly    bool   `json:"summary_only"`
+	MaxFilesPerDir int    `json:"max_files_per_dir"`
 }
 
 type IndexMapNode struct {
 	Path              string         `json:"path"`
 	State             string         `json:"state"`
+	Freshness         string         `json:"freshness"`
+	FreshnessChecked  bool           `json:"freshness_checked"`
+	Partial           bool           `json:"partial"`
+	Issues            []MapIssue     `json:"issues"`
+	Next              string         `json:"next,omitempty"`
+	Omitted           []MapOmission  `json:"omitted,omitempty"`
 	FolderDescription string         `json:"folder_description,omitempty"`
 	BriefSummary      string         `json:"brief_summary,omitempty"`
 	Stats             MetadataStats  `json:"stats,omitempty"`
@@ -118,11 +148,58 @@ type IndexMapNode struct {
 	Children          []IndexMapNode `json:"children,omitempty"`
 }
 
+type MapOmission struct {
+	Reason string `json:"reason"`
+	Path   string `json:"path"`
+	Next   string `json:"next"`
+}
+
+type MapIssue struct {
+	Kind    string `json:"kind"`
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
 type IndexMapFile struct {
 	Path     string `json:"path"`
 	FileType string `json:"file_type,omitempty"`
 	Summary  string `json:"summary,omitempty"`
 	Status   string `json:"status,omitempty"`
+}
+
+type TagMapResult struct {
+	Root     string       `json:"root"`
+	Mode     string       `json:"mode"`
+	Query    []string     `json:"query,omitempty"`
+	Match    string       `json:"match,omitempty"`
+	Tags     []TagCount   `json:"tags,omitempty"`
+	Files    []TagMapFile `json:"files,omitempty"`
+	Complete bool         `json:"complete"`
+	Issues   []MapIssue   `json:"issues,omitempty"`
+}
+
+type TagCount struct {
+	Tag       string `json:"tag"`
+	FileCount int    `json:"file_count"`
+}
+
+type TagMapFile struct {
+	Path        string   `json:"path"`
+	MatchedTags []string `json:"matched_tags"`
+}
+
+type RecentModifiedResult struct {
+	Root       string               `json:"root"`
+	Files      []RecentModifiedFile `json:"files"`
+	TotalFiles int                  `json:"total_files"`
+	Truncated  bool                 `json:"truncated"`
+	Complete   bool                 `json:"complete"`
+	Issues     []MapIssue           `json:"issues,omitempty"`
+}
+
+type RecentModifiedFile struct {
+	Path    string `json:"path"`
+	ModTime string `json:"mod_time"`
 }
 
 type IndexedPathNode struct {
@@ -152,6 +229,7 @@ type Metadata struct {
 	BriefSummary      string                  `json:"brief_summary,omitempty"`
 	Stats             MetadataStats           `json:"stats,omitempty"`
 	Methods           map[string]MethodOutput `json:"methods,omitempty"`
+	RunMethods        map[string]MethodOutput `json:"run_methods,omitempty"`
 	Files             []MetadataFile          `json:"files,omitempty"`
 	NotIndexedFiles   []NotIndexedFile        `json:"not_indexed_files,omitempty"`
 	FailedFiles       []FailedFile            `json:"failed_files,omitempty"`
@@ -215,6 +293,7 @@ type buildRuntime struct {
 	folderLimiter chan struct{}
 	report        *RunReport
 	reportMu      sync.Mutex
+	runMethods    map[string]MethodOutput
 }
 
 type fileBuildResult struct {
@@ -252,6 +331,7 @@ func Build(opts Options) (*PathIndexTree, error) {
 	if !info.IsDir() {
 		return nil, apperr.InvalidArguments("index requires a directory path: %s.", opts.Root)
 	}
+	opts.Root = root
 
 	matcher := newMatcher(opts.Include, append([]string{}, append(defaultExcludes, opts.Exclude...)...))
 	started := time.Now().UTC()
@@ -270,12 +350,21 @@ func Build(opts Options) (*PathIndexTree, error) {
 		MethodCategoryCounts: map[string]int{},
 		MethodTagCounts:      map[string]int{},
 	}
+	startOutputs, err := runLifecycleMethods(MethodStageStart, opts, rt, timestamp, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	rt.runMethods = startOutputs
 	rootName := filepath.Base(root)
 	if rootName == "." || rootName == string(filepath.Separator) || rootName == "" {
 		rootName = filepath.Clean(root)
 	}
 
-	tree, err := buildDir(root, rootName, 0, opts, matcher, timestamp, tracker, rt, true)
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, apperr.IOError("Failed to resolve index root: %s.", root)
+	}
+	tree, err := buildDir(root, rootName, 0, opts, matcher, timestamp, tracker, rt, true, rootReal, map[string]bool{})
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +374,22 @@ func Build(opts Options) (*PathIndexTree, error) {
 	sort.Strings(rt.report.CoveredFolders)
 	report := rt.report
 	rt.reportMu.Unlock()
+
+	endOutputs, err := runLifecycleMethods(MethodStageEnd, opts, rt, report.FinishedAt, &tree, report)
+	if err != nil {
+		return nil, err
+	}
+	if len(endOutputs) > 0 {
+		if rt.runMethods == nil {
+			rt.runMethods = map[string]MethodOutput{}
+		}
+		for id, output := range endOutputs {
+			rt.runMethods[id] = output
+		}
+		if err := updateRootRunMethods(root, rt.runMethods); err != nil {
+			return nil, err
+		}
+	}
 
 	return &PathIndexTree{
 		Root: root,
@@ -427,7 +532,11 @@ func Eval(path string) (*EvalResult, error) {
 	}
 
 	result := &EvalResult{Root: root}
-	if err := evalDir(root, rootName, matcher, result); err != nil {
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, apperr.IOError("Failed to resolve eval root: %s.", root)
+	}
+	if err := evalDir(root, rootName, matcher, result, rootReal, map[string]bool{}); err != nil {
 		return nil, err
 	}
 
@@ -447,6 +556,176 @@ func Eval(path string) (*EvalResult, error) {
 }
 
 func BuildMap(path string) (*PathIndexMap, error) {
+	return BuildMapWithOptions(path, MapOptions{Full: true})
+}
+
+func BuildRecentModifiedMap(path string, limit int) (*RecentModifiedResult, error) {
+	mapped, err := BuildMapWithOptions(path, MapOptions{Full: true})
+	if err != nil {
+		return nil, err
+	}
+	result := &RecentModifiedResult{
+		Root:     mapped.Root,
+		Complete: !mapped.Map.Partial,
+		Issues:   collectMapIssues(mapped.Map),
+	}
+	seenFiles := map[string]bool{}
+	var visit func(IndexMapNode)
+	visit = func(node IndexMapNode) {
+		available := map[string]bool{}
+		for _, file := range node.Files {
+			available[file.Path] = true
+		}
+		meta, readErr := readMetadata(node.Path)
+		if readErr == nil && meta != nil {
+			for _, file := range meta.Files {
+				if !available[file.Path] || seenFiles[file.Path] {
+					continue
+				}
+				seenFiles[file.Path] = true
+				modTime := file.ModTime
+				if info, statErr := os.Stat(filepath.Join(node.Path, filepath.Base(file.Path))); statErr == nil {
+					modTime = info.ModTime().UTC().Format(time.RFC3339)
+				}
+				result.Files = append(result.Files, RecentModifiedFile{Path: file.Path, ModTime: modTime})
+			}
+		}
+		for _, issue := range node.Issues {
+			if issue.Kind != "new_file" || seenFiles[issue.Path] {
+				continue
+			}
+			if info, statErr := os.Stat(filepath.Join(node.Path, filepath.Base(issue.Path))); statErr == nil {
+				seenFiles[issue.Path] = true
+				result.Files = append(result.Files, RecentModifiedFile{Path: issue.Path, ModTime: info.ModTime().UTC().Format(time.RFC3339)})
+			}
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	visit(mapped.Map)
+	sort.Slice(result.Files, func(i, j int) bool {
+		if result.Files[i].ModTime == result.Files[j].ModTime {
+			return result.Files[i].Path < result.Files[j].Path
+		}
+		return result.Files[i].ModTime > result.Files[j].ModTime
+	})
+	result.TotalFiles = len(result.Files)
+	if limit > 0 && len(result.Files) > limit {
+		result.Files = result.Files[:limit]
+		result.Truncated = true
+	}
+	return result, nil
+}
+
+func BuildTagMap(path string, query []string) (*TagMapResult, error) {
+	mapped, err := BuildMapWithOptions(path, MapOptions{Full: true})
+	if err != nil {
+		return nil, err
+	}
+
+	normalizedQuery := make([]string, 0, len(query))
+	seenQuery := map[string]bool{}
+	for _, tag := range query {
+		tag = strings.ToLower(strings.TrimSpace(tag))
+		if tag != "" && !seenQuery[tag] {
+			normalizedQuery = append(normalizedQuery, tag)
+			seenQuery[tag] = true
+		}
+	}
+	result := &TagMapResult{
+		Root:     mapped.Root,
+		Mode:     "tag_catalog",
+		Complete: !mapped.Map.Partial,
+		Issues:   collectMapIssues(mapped.Map),
+	}
+	if len(normalizedQuery) > 0 {
+		result.Mode = "tag_files"
+		result.Query = normalizedQuery
+		result.Match = "all"
+	}
+
+	counts := map[string]int{}
+	seenFiles := map[string]bool{}
+	var visit func(IndexMapNode)
+	visit = func(node IndexMapNode) {
+		available := map[string]bool{}
+		for _, file := range node.Files {
+			available[file.Path] = true
+		}
+		meta, readErr := readMetadata(node.Path)
+		if readErr == nil && meta != nil {
+			for _, file := range meta.Files {
+				if !available[file.Path] || seenFiles[file.Path] {
+					continue
+				}
+				seenFiles[file.Path] = true
+				tags := metadataFileTags(file)
+				for _, tag := range tags {
+					counts[tag]++
+				}
+				if len(normalizedQuery) > 0 && containsAllTags(tags, normalizedQuery) {
+					result.Files = append(result.Files, TagMapFile{Path: file.Path, MatchedTags: append([]string(nil), normalizedQuery...)})
+				}
+			}
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	visit(mapped.Map)
+
+	if len(normalizedQuery) == 0 {
+		for tag, count := range counts {
+			result.Tags = append(result.Tags, TagCount{Tag: tag, FileCount: count})
+		}
+		sort.Slice(result.Tags, func(i, j int) bool { return result.Tags[i].Tag < result.Tags[j].Tag })
+	}
+	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
+	return result, nil
+}
+
+func metadataFileTags(file MetadataFile) []string {
+	output, ok := file.Methods[MethodClassifyV1]
+	if !ok || output.Status != MethodStatusOK {
+		return nil
+	}
+	tags := stringSliceField(output.Fields["tags"])
+	result := make([]string, 0, len(tags))
+	seen := map[string]bool{}
+	for _, tag := range tags {
+		tag = strings.ToLower(strings.TrimSpace(tag))
+		if tag != "" && !seen[tag] {
+			result = append(result, tag)
+			seen[tag] = true
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func containsAllTags(tags, query []string) bool {
+	available := map[string]bool{}
+	for _, tag := range tags {
+		available[tag] = true
+	}
+	for _, tag := range query {
+		if !available[tag] {
+			return false
+		}
+	}
+	return true
+}
+
+func collectMapIssues(root IndexMapNode) []MapIssue {
+	issues := append([]MapIssue(nil), root.Issues...)
+	for _, child := range root.Children {
+		issues = append(issues, collectMapIssues(child)...)
+	}
+	return issues
+}
+
+func BuildMapWithOptions(path string, opts MapOptions) (*PathIndexMap, error) {
 	if path == "" {
 		return nil, apperr.InvalidArguments("index map requires exactly one path argument.")
 	}
@@ -470,19 +749,34 @@ func BuildMap(path string) (*PathIndexMap, error) {
 	if rootName == "." || rootName == string(filepath.Separator) || rootName == "" {
 		rootName = filepath.Clean(root)
 	}
-	node, err := buildMapNode(root, rootName, matcher)
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, apperr.IOError("Failed to resolve index map root: %s.", root)
+	}
+	projection := MapProjection{Mode: "bounded", Depth: opts.Depth, SummaryOnly: opts.SummaryOnly, MaxFilesPerDir: opts.MaxFilesPerDir}
+	if opts.Full {
+		opts.Depth = -1
+		opts.MaxFilesPerDir = -1
+		opts.SummaryOnly = false
+		projection = MapProjection{Mode: "full", Depth: -1, MaxFilesPerDir: -1}
+	}
+	node, err := buildMapNode(root, rootName, matcher, rootReal, map[string]bool{}, opts, 0)
 	if err != nil {
 		return nil, err
 	}
 	return &PathIndexMap{
 		Root: root,
 		StateGuide: map[string]string{
-			"dirty":     "Metadata exists but is marked stale. Re-run index before trusting it.",
-			"precision": "Map is a routing overview. For precise answers, inspect the target file directly or re-run index without --no-summary.",
-			"ready":     "Metadata exists for this directory. Use the summary and files shown here first.",
-			"unindexed": "No metadata file exists for this directory yet. If needed, inspect the directory directly or run index on it.",
+			"dirty":      "Metadata exists and is explicitly marked stale.",
+			"precision":  "Map is routing evidence; inspect source files before precise claims.",
+			"ready":      "Metadata exists; consult freshness before trusting summaries.",
+			"unindexed":  "Metadata is missing; structural child stubs do not prove descendant absence.",
+			"corrupt":    "Metadata could not be parsed; the node is partial.",
+			"unreadable": "Metadata or directory content could not be read; the node is partial.",
 		},
-		Map: node,
+		IgnorePolicy: IgnorePolicy{Mode: "blacklist", NegationSupported: false, Sources: []string{".gitignore", ".aaignore"}},
+		Projection:   projection,
+		Map:          node,
 	}, nil
 }
 
@@ -583,10 +877,26 @@ func loadIgnoreFilePatterns(root, fileName string) ([]string, error) {
 	return patterns, nil
 }
 
-func buildDir(absPath, displayPath string, depth int, opts Options, matcher matcher, timestamp string, tracker *failureTracker, rt *buildRuntime, allowParallelChildren bool) (IndexedPathNode, error) {
+func buildDir(absPath, displayPath string, depth int, opts Options, matcher matcher, timestamp string, tracker *failureTracker, rt *buildRuntime, allowParallelChildren bool, rootReal string, ancestors map[string]bool) (IndexedPathNode, error) {
 	if err := runtimeContextErr(rt); err != nil {
 		return IndexedPathNode{}, err
 	}
+	realDir, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return IndexedPathNode{}, apperr.IOError("unreadable_symlink: %s.", absPath)
+	}
+	if !pathWithinRoot(rootReal, realDir) {
+		return IndexedPathNode{}, apperr.IOError("symlink_out_of_root: %s.", absPath)
+	}
+	if ancestors[realDir] {
+		return IndexedPathNode{}, apperr.IOError("symlink_cycle: %s.", absPath)
+	}
+	nextAncestors := make(map[string]bool, len(ancestors)+1)
+	for path := range ancestors {
+		nextAncestors[path] = true
+	}
+	nextAncestors[realDir] = true
+	isRoot := depth == 0
 	rt.noteFolder(absPath)
 	entries, err := os.ReadDir(absPath)
 	if err != nil {
@@ -603,6 +913,9 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 		FolderPath:  absPath,
 		LastUpdated: timestamp,
 		Dirty:       false,
+	}
+	if allowRootRunMethods(isRoot, rt) {
+		metadata.RunMethods = copyMethodOutputs(rt.runMethods)
 	}
 	priorMetadata, _ := readMetadata(absPath)
 	dirEntries := make([]os.DirEntry, 0, len(entries))
@@ -640,7 +953,7 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 	}
 
 	children := make([]IndexedPathNode, 0, len(entries))
-	childResults, err := processChildDirs(absPath, displayPath, depth, dirEntries, opts, localMatcher, timestamp, tracker, rt, allowParallelChildren)
+	childResults, err := processChildDirs(absPath, displayPath, depth, dirEntries, opts, localMatcher, timestamp, tracker, rt, allowParallelChildren, rootReal, nextAncestors)
 	if err != nil {
 		return IndexedPathNode{}, err
 	}
@@ -698,6 +1011,9 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 	metadata.BriefSummary = summarizeDir(children)
 	metadata.Stats = buildMetadataStats(children, metadata)
 	runFolderMethods(metadata, childResults, opts, timestamp, rt)
+	if allowRootRunMethods(isRoot, rt) {
+		metadata.RunMethods = copyMethodOutputs(rt.runMethods)
+	}
 	if err := writeMetadata(absPath, metadata); err != nil {
 		return IndexedPathNode{}, err
 	}
@@ -1384,6 +1700,91 @@ func runFolderMethods(metadata *Metadata, childResults []childDirResult, opts Op
 	}
 }
 
+func runLifecycleMethods(stage MethodStage, opts Options, rt *buildRuntime, timestamp string, tree *IndexedPathNode, report *RunReport) (map[string]MethodOutput, error) {
+	selected := selectedMethodSet(opts)
+	reg := defaultMethodRegistry()
+	outputs := map[string]MethodOutput{}
+	input := LifecycleInput{
+		Stage:           stage,
+		Root:            opts.Root,
+		Depth:           opts.Depth,
+		Include:         append([]string(nil), opts.Include...),
+		Exclude:         append([]string(nil), opts.Exclude...),
+		Refresh:         opts.Refresh,
+		NoSummary:       opts.NoSummary,
+		MaxFileSize:     opts.MaxFileSize,
+		EnabledMethods:  selectedMethods(opts),
+		IndexPlanPath:   opts.IndexPlanPath,
+		IndexPlanDigest: opts.IndexPlanDigest,
+		Tree:            tree,
+		Report:          report,
+	}
+	for id, method := range reg.lifecycleMethods {
+		if !selected[id] || method.Stage() != stage {
+			continue
+		}
+		descriptor := method.Describe()
+		output := MethodOutput{
+			Stage:       descriptor.Stage,
+			GeneratedAt: timestamp,
+			InputHash:   stableInputHash(input, method),
+		}
+		fields, err := method.Run(rt.ctx, input)
+		if err != nil {
+			output.Status = MethodStatusFailed
+			output.Error = err.Error()
+			outputs[id] = output
+			if rt != nil {
+				rt.noteMethodOutput(id, output)
+			}
+			if descriptor.Required {
+				return outputs, err
+			}
+			continue
+		}
+		output.Status = MethodStatusOK
+		output.Fields = fields
+		outputs[id] = output
+		if rt != nil {
+			rt.noteMethodOutput(id, output)
+		}
+	}
+	if len(outputs) == 0 {
+		return nil, nil
+	}
+	return outputs, nil
+}
+
+func allowRootRunMethods(isRoot bool, rt *buildRuntime) bool {
+	return isRoot && rt != nil && len(rt.runMethods) > 0
+}
+
+func copyMethodOutputs(source map[string]MethodOutput) map[string]MethodOutput {
+	if len(source) == 0 {
+		return nil
+	}
+	out := make(map[string]MethodOutput, len(source))
+	for id, output := range source {
+		out[id] = output
+	}
+	return out
+}
+
+func updateRootRunMethods(root string, outputs map[string]MethodOutput) error {
+	if len(outputs) == 0 {
+		return nil
+	}
+	metadata, err := readMetadata(root)
+	if err != nil {
+		return err
+	}
+	if metadata == nil {
+		return apperr.IOError("Root index metadata was not written: %s.", root)
+	}
+	metadata.RunMethods = copyMethodOutputs(outputs)
+	return writeMetadata(root, metadata)
+}
+
 func buildMetadataStats(children []IndexedPathNode, metadata *Metadata) MetadataStats {
 	stats := MetadataStats{}
 	for _, child := range children {
@@ -1571,64 +1972,233 @@ func writeMetadata(root string, metadata *Metadata) error {
 	return nil
 }
 
-func buildMapNode(dir, displayPath string, matcher matcher) (IndexMapNode, error) {
+func buildMapNode(dir, displayPath string, matcher matcher, rootReal string, ancestors map[string]bool, opts MapOptions, depth int) (IndexMapNode, error) {
 	node := IndexMapNode{
-		Path: filepath.ToSlash(dir),
+		Path:      filepath.ToSlash(dir),
+		Freshness: "unknown",
+		Issues:    []MapIssue{},
 	}
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		node.State = "unreadable"
+		node.Partial = true
+		node.Issues = append(node.Issues, MapIssue{Kind: "unreadable_symlink", Path: filepath.ToSlash(dir), Message: err.Error()})
+		return node, nil
+	}
+	if !pathWithinRoot(rootReal, realDir) {
+		node.State = "unindexed"
+		node.Partial = true
+		node.Issues = append(node.Issues, MapIssue{Kind: "symlink_out_of_root", Path: filepath.ToSlash(dir), Message: "Resolved directory target is outside the requested map root."})
+		return node, nil
+	}
+	if ancestors[realDir] {
+		node.State = "unindexed"
+		node.Partial = true
+		node.Issues = append(node.Issues, MapIssue{Kind: "symlink_cycle", Path: filepath.ToSlash(dir), Message: "Resolved directory target is already an ancestor in this traversal."})
+		return node, nil
+	}
+	nextAncestors := make(map[string]bool, len(ancestors)+1)
+	for path := range ancestors {
+		nextAncestors[path] = true
+	}
+	nextAncestors[realDir] = true
 
 	metaPath := filepath.Join(dir, metadataFilename)
 	content, err := os.ReadFile(metaPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			node.State = "unindexed"
-			return node, nil
+	var meta *Metadata
+	if err != nil && !os.IsNotExist(err) {
+		node.State = "unreadable"
+		node.Partial = true
+		node.Issues = append(node.Issues, MapIssue{Kind: "unreadable_metadata", Path: filepath.ToSlash(metaPath), Message: err.Error()})
+		node.Next = "aascribe map " + filepath.ToSlash(dir)
+	}
+	if os.IsNotExist(err) {
+		node.State = "unindexed"
+		node.Partial = true
+		node.Issues = append(node.Issues, MapIssue{Kind: "uninspected_subtree", Path: filepath.ToSlash(dir), Message: "Metadata-backed file details are unavailable; child directory stubs are structural discovery only."})
+		node.Next = "aascribe map " + filepath.ToSlash(dir)
+	} else if err == nil {
+		var decoded Metadata
+		if err := json.Unmarshal(content, &decoded); err != nil {
+			node.State = "corrupt"
+			node.Partial = true
+			node.Issues = append(node.Issues, MapIssue{Kind: "corrupt_metadata", Path: filepath.ToSlash(metaPath), Message: err.Error()})
+			node.Next = "aascribe map " + filepath.ToSlash(dir)
+		} else {
+			meta = &decoded
+			if meta.Dirty {
+				node.State = "dirty"
+			} else {
+				node.State = "ready"
+			}
+			node.FolderDescription = meta.FolderDescription
+			node.BriefSummary = meta.BriefSummary
+			node.Stats = meta.Stats
+			node.Files = projectMapFiles(meta.Files)
 		}
-		return IndexMapNode{}, apperr.IOError("Failed to read index metadata: %s.", metaPath)
 	}
-
-	var meta Metadata
-	if err := json.Unmarshal(content, &meta); err != nil {
-		return IndexMapNode{}, apperr.Serialization("Failed to parse index metadata.")
-	}
-	if meta.Dirty {
-		node.State = "dirty"
-	} else {
-		node.State = "ready"
-	}
-	node.FolderDescription = meta.FolderDescription
-	node.BriefSummary = meta.BriefSummary
-	node.Stats = meta.Stats
-	node.Files = projectMapFiles(meta.Files)
 
 	localPatterns, err := loadIgnorePatterns(dir)
 	if err != nil {
-		return IndexMapNode{}, err
+		node.State = "unreadable"
+		node.Partial = true
+		node.Issues = append(node.Issues, MapIssue{Kind: "unreadable_ignore_policy", Path: filepath.ToSlash(dir), Message: err.Error()})
+		localPatterns = nil
 	}
 	localMatcher := matcher.withScopedExcludes(displayPath, localPatterns)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return IndexMapNode{}, apperr.IOError("Failed to read directory: %s.", dir)
+		node.State = "unreadable"
+		node.Partial = true
+		node.Issues = append(node.Issues, MapIssue{Kind: "unreadable_directory", Path: filepath.ToSlash(dir), Message: err.Error()})
+		return node, nil
+	}
+	if meta != nil {
+		node.FreshnessChecked = true
+		node.Freshness = "fresh"
+		node.Issues = append(node.Issues, directMapFreshnessIssues(dir, displayPath, *meta, entries, localMatcher)...)
+		node.Files = removeDeletedMapFiles(node.Files, node.Issues)
+		if meta.Dirty || len(node.Issues) > 0 {
+			node.Freshness = "stale"
+		}
+		boundMapFiles(&node, opts)
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		childDir := filepath.Join(dir, entry.Name())
+		isDir, inspectErr := entryIsDir(childDir, entry)
+		if inspectErr != nil || !isDir {
 			continue
 		}
 		childDisplay := filepath.ToSlash(filepath.Join(displayPath, entry.Name()))
 		if localMatcher.skip(entry.Name(), childDisplay, true) {
 			continue
 		}
-		childDir := filepath.Join(dir, entry.Name())
-		childNode, err := buildMapNode(childDir, childDisplay, localMatcher)
+		if opts.Depth >= 0 && depth >= opts.Depth {
+			node.Partial = true
+			node.Omitted = append(node.Omitted, MapOmission{Reason: "depth_limit", Path: filepath.ToSlash(childDir), Next: fmt.Sprintf("aascribe map %q --depth %d", filepath.ToSlash(childDir), opts.Depth)})
+			continue
+		}
+		childNode, err := buildMapNode(childDir, childDisplay, localMatcher, rootReal, nextAncestors, opts, depth+1)
 		if err != nil {
 			return IndexMapNode{}, err
 		}
 		node.Children = append(node.Children, childNode)
+		if childNode.Partial {
+			node.Partial = true
+		}
 	}
 
 	sort.Slice(node.Children, func(i, j int) bool {
 		return node.Children[i].Path < node.Children[j].Path
 	})
 	return node, nil
+}
+
+func boundMapFiles(node *IndexMapNode, opts MapOptions) {
+	if node == nil || len(node.Files) == 0 {
+		return
+	}
+	if opts.SummaryOnly {
+		node.Files = nil
+		node.Partial = true
+		node.Omitted = append(node.Omitted, MapOmission{Reason: "summary_only", Path: node.Path, Next: fmt.Sprintf("aascribe map %q --full", node.Path)})
+		return
+	}
+	if opts.MaxFilesPerDir >= 0 && len(node.Files) > opts.MaxFilesPerDir {
+		node.Files = node.Files[:opts.MaxFilesPerDir]
+		node.Partial = true
+		node.Omitted = append(node.Omitted, MapOmission{Reason: "file_limit", Path: node.Path, Next: fmt.Sprintf("aascribe map %q --full", node.Path)})
+	}
+}
+
+func pathWithinRoot(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func removeDeletedMapFiles(files []IndexMapFile, issues []MapIssue) []IndexMapFile {
+	deleted := map[string]bool{}
+	for _, issue := range issues {
+		if issue.Kind == "deleted_file" {
+			deleted[issue.Path] = true
+		}
+	}
+	if len(deleted) == 0 {
+		return files
+	}
+	kept := make([]IndexMapFile, 0, len(files))
+	for _, file := range files {
+		if !deleted[file.Path] {
+			kept = append(kept, file)
+		}
+	}
+	return kept
+}
+
+func directMapFreshnessIssues(dir, displayPath string, meta Metadata, entries []os.DirEntry, matcher matcher) []MapIssue {
+	issues := []MapIssue{}
+	current := map[string]struct{}{}
+	for _, entry := range entries {
+		name := entry.Name()
+		childAbs := filepath.Join(dir, name)
+		isDir, err := entryIsDir(childAbs, entry)
+		if err != nil {
+			issues = append(issues, MapIssue{Kind: "unreadable", Path: filepath.ToSlash(filepath.Join(displayPath, name)), Message: err.Error()})
+			continue
+		}
+		if isDir || isMetadataArtifact(name) {
+			continue
+		}
+		childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
+		if matcher.skip(name, childDisplay, false) {
+			continue
+		}
+		current[childDisplay] = struct{}{}
+		prior := findMetadataFile(&meta, childDisplay)
+		if prior == nil {
+			kind := "new_file"
+			if isIgnorePolicyFile(name) {
+				kind = "ignore_policy_changed"
+			}
+			issues = append(issues, MapIssue{Kind: kind, Path: childDisplay, Message: "File is not present in index metadata."})
+			continue
+		}
+		state, reason, err := evalFile(filepath.Join(dir, name), childDisplay, &meta)
+		if err != nil {
+			issues = append(issues, MapIssue{Kind: "unreadable", Path: childDisplay, Message: err.Error()})
+			continue
+		}
+		if state == "needs_index" {
+			kind := reason
+			if isIgnorePolicyFile(name) {
+				kind = "ignore_policy_changed"
+			}
+			issues = append(issues, MapIssue{Kind: kind, Path: childDisplay, Message: "File differs from index metadata."})
+		}
+	}
+	for _, prior := range meta.Files {
+		if _, ok := current[prior.Path]; !ok {
+			kind := "deleted_file"
+			if isIgnorePolicyFile(filepath.Base(prior.Path)) {
+				kind = "ignore_policy_changed"
+			}
+			issues = append(issues, MapIssue{Kind: kind, Path: prior.Path, Message: "Indexed file is missing from the current directory."})
+		}
+	}
+	sort.Slice(issues, func(i, j int) bool {
+		if issues[i].Path == issues[j].Path {
+			return issues[i].Kind < issues[j].Kind
+		}
+		return issues[i].Path < issues[j].Path
+	})
+	return issues
+}
+
+func isIgnorePolicyFile(name string) bool {
+	return name == ".gitignore" || name == ".aaignore"
 }
 
 func projectMapFiles(files []MetadataFile) []IndexMapFile {
@@ -1805,7 +2375,7 @@ func runtimeContextErr(rt *buildRuntime) error {
 	return nil
 }
 
-func processChildDirs(absPath, displayPath string, depth int, entries []os.DirEntry, opts Options, matcher matcher, timestamp string, tracker *failureTracker, rt *buildRuntime, allowParallelChildren bool) ([]childDirResult, error) {
+func processChildDirs(absPath, displayPath string, depth int, entries []os.DirEntry, opts Options, matcher matcher, timestamp string, tracker *failureTracker, rt *buildRuntime, allowParallelChildren bool, rootReal string, ancestors map[string]bool) ([]childDirResult, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -1819,7 +2389,7 @@ func processChildDirs(absPath, displayPath string, depth int, entries []os.DirEn
 			name := entry.Name()
 			childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
 			childAbs := filepath.Join(absPath, name)
-			node, err := buildDir(childAbs, childDisplay, depth+1, opts, matcher, timestamp, tracker, rt, false)
+			node, err := buildDir(childAbs, childDisplay, depth+1, opts, matcher, timestamp, tracker, rt, false, rootReal, ancestors)
 			var childMetadata *Metadata
 			if err == nil {
 				childMetadata, _ = readMetadata(childAbs)
@@ -1863,7 +2433,7 @@ func processChildDirs(absPath, displayPath string, depth int, entries []os.DirEn
 				name := job.entry.Name()
 				childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
 				childAbs := filepath.Join(absPath, name)
-				node, err := buildDir(childAbs, childDisplay, depth+1, opts, matcher, timestamp, tracker, rt, false)
+				node, err := buildDir(childAbs, childDisplay, depth+1, opts, matcher, timestamp, tracker, rt, false, rootReal, ancestors)
 				var childMetadata *Metadata
 				if err == nil {
 					childMetadata, _ = readMetadata(childAbs)
@@ -1907,7 +2477,25 @@ func processChildDirs(absPath, displayPath string, depth int, entries []os.DirEn
 	return results, nil
 }
 
-func evalDir(absPath, displayPath string, matcher matcher, result *EvalResult) error {
+func evalDir(absPath, displayPath string, matcher matcher, result *EvalResult, rootReal string, ancestors map[string]bool) error {
+	realDir, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		result.Folders = append(result.Folders, EvalFolder{Path: filepath.ToSlash(absPath), State: "skipped", Reason: "unreadable_symlink"})
+		return nil
+	}
+	if !pathWithinRoot(rootReal, realDir) {
+		result.Folders = append(result.Folders, EvalFolder{Path: filepath.ToSlash(absPath), State: "skipped", Reason: "symlink_out_of_root"})
+		return nil
+	}
+	if ancestors[realDir] {
+		result.Folders = append(result.Folders, EvalFolder{Path: filepath.ToSlash(absPath), State: "skipped", Reason: "symlink_cycle"})
+		return nil
+	}
+	nextAncestors := make(map[string]bool, len(ancestors)+1)
+	for path := range ancestors {
+		nextAncestors[path] = true
+	}
+	nextAncestors[realDir] = true
 	entries, err := os.ReadDir(absPath)
 	if err != nil {
 		return apperr.IOError("Failed to read directory: %s.", absPath)
@@ -1937,13 +2525,17 @@ func evalDir(absPath, displayPath string, matcher matcher, result *EvalResult) e
 	for _, entry := range entries {
 		name := entry.Name()
 		childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
-		if localMatcher.skip(name, childDisplay, entry.IsDir()) {
+		childAbs := filepath.Join(absPath, name)
+		isDir, err := entryIsDir(childAbs, entry)
+		if err != nil {
+			return err
+		}
+		if localMatcher.skip(name, childDisplay, isDir) {
 			continue
 		}
 
-		childAbs := filepath.Join(absPath, name)
-		if entry.IsDir() {
-			if err := evalDir(childAbs, childDisplay, localMatcher, result); err != nil {
+		if isDir {
+			if err := evalDir(childAbs, childDisplay, localMatcher, result, rootReal, nextAncestors); err != nil {
 				return err
 			}
 			continue
@@ -2009,19 +2601,12 @@ func evalFile(absPath, displayPath string, meta *Metadata) (string, string, erro
 		return "needs_index", "previous_failure", nil
 	}
 
-	info, err := os.Stat(absPath)
+	content, err := os.ReadFile(absPath)
 	if err != nil {
-		return "", "", apperr.IOError("Failed to inspect file: %s.", absPath)
+		return "", "", apperr.IOError("Failed to read file for freshness check: %s.", absPath)
 	}
-	currentModTime := info.ModTime().UTC().Format(time.RFC3339)
-	if info.Size() != prior.Size || currentModTime != prior.ModTime {
-		analysis, err := analyzeFile(context.Background(), absPath, displayPath, -1, time.Now().UTC().Format(time.RFC3339), nil, "medium", "")
-		if err != nil {
-			return "", "", err
-		}
-		if analysis.hash != prior.ContentHash {
-			return "needs_index", "modified", nil
-		}
+	if "sha256:"+sha256Hex(content) != prior.ContentHash {
+		return "needs_index", "modified", nil
 	}
 	return "unchanged", "unchanged", nil
 }

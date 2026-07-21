@@ -1,6 +1,6 @@
 # Index Metadata Method Tasks
 
-Status: v1-v2 implemented; v3-v4 planned
+Status: v1-v3 implemented; v4 planned
 
 Task breakdown for extending `aascribe index` so scan-time metadata can grow through pluggable metadata methods without hardcoding every future field into the core index engine.
 
@@ -67,6 +67,8 @@ Out of scope:
 - lifecycle hook execution
 
 ### v3: Lifecycle Hooks
+
+Implemented.
 
 Scope:
 
@@ -493,11 +495,11 @@ The source of truth for current method capabilities is JSON output from `aascrib
 
 ### v3 Tasks
 
-1. Add `LifecycleMethod` and root-only `run_methods` metadata.
-2. Add start hooks for validation/run-level metadata only.
-3. Add end hooks for final aggregation/report metadata.
-4. Add required/optional lifecycle failure handling.
-5. Add tests that lifecycle hooks do not mutate downstream file/folder method input.
+1. Add `LifecycleMethod` and root-only `run_methods` metadata. Done.
+2. Add start hooks for validation/run-level metadata only. Done with `builtin.run-context.v1`.
+3. Add end hooks for final aggregation/report metadata. Done with `builtin.run-report.v1`.
+4. Add required/optional lifecycle failure handling. Done for the lifecycle method runner.
+5. Add tests that lifecycle hooks do not mutate downstream file/folder method input. Done.
 
 ### v4 Tasks
 

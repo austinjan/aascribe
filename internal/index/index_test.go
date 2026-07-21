@@ -176,6 +176,69 @@ func TestBuildWritesClassifyAndRoutingMethods(t *testing.T) {
 	}
 }
 
+func TestBuildWritesLifecycleRunMethodsOnlyAtRoot(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "main.go"), "package main\n")
+	mustWriteFile(t, filepath.Join(root, "nested", "README.md"), "# Nested\n")
+
+	baseline, err := Build(Options{
+		Root:            root,
+		Depth:           2,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1},
+	})
+	if err != nil {
+		t.Fatalf("expected baseline build success, got %v", err)
+	}
+	if baseline.Run == nil || baseline.Run.MethodStatusCounts[MethodClassifyV1+":ok"] != 2 {
+		t.Fatalf("expected baseline classify counts, got %#v", baseline.Run)
+	}
+	baselineMeta := readMetadataFile(t, root)
+	baselineHash := baselineMeta.Files[0].Methods[MethodClassifyV1].InputHash
+
+	result, err := Build(Options{
+		Root:            root,
+		Depth:           2,
+		Refresh:         true,
+		NoSummary:       true,
+		MaxFileSize:     1024,
+		MetadataMethods: []string{MethodBase, MethodClassifyV1, MethodRunContextV1, MethodRunReportV1},
+		IndexPlanPath:   filepath.Join(root, "aascribe.index.toml"),
+		IndexPlanDigest: "sha256:test",
+	})
+	if err != nil {
+		t.Fatalf("expected lifecycle build success, got %v", err)
+	}
+	if result.Run == nil || result.Run.MethodStatusCounts[MethodRunContextV1+":ok"] != 1 || result.Run.MethodStatusCounts[MethodRunReportV1+":ok"] != 1 {
+		t.Fatalf("expected lifecycle method counts, got %#v", result.Run)
+	}
+
+	meta := readMetadataFile(t, root)
+	if len(meta.RunMethods) != 2 {
+		t.Fatalf("expected root run methods, got %#v", meta.RunMethods)
+	}
+	start := meta.RunMethods[MethodRunContextV1]
+	if start.Stage != MethodStageStart || start.Status != MethodStatusOK || start.InputHash == "" {
+		t.Fatalf("unexpected start lifecycle output: %#v", start)
+	}
+	end := meta.RunMethods[MethodRunReportV1]
+	if end.Stage != MethodStageEnd || end.Status != MethodStatusOK || end.InputHash == "" {
+		t.Fatalf("unexpected end lifecycle output: %#v", end)
+	}
+	if got, _ := end.Fields["metadata_files"].(float64); got != 2 {
+		t.Fatalf("expected end lifecycle metadata_files aggregate, got %#v", end.Fields)
+	}
+	if got := meta.Files[0].Methods[MethodClassifyV1].InputHash; got != baselineHash {
+		t.Fatalf("expected lifecycle methods not to mutate file method input hash: baseline=%s got=%s", baselineHash, got)
+	}
+
+	childMeta := readMetadataFile(t, filepath.Join(root, "nested"))
+	if len(childMeta.RunMethods) != 0 {
+		t.Fatalf("expected lifecycle run_methods only at root, got %#v", childMeta.RunMethods)
+	}
+}
+
 func TestBuildWritesRetrievalMethod(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, "docs", "tools.md"), `# Tools
@@ -319,6 +382,25 @@ enabled = ["builtin.classify.v1", "builtin.routing.v1"]
 	}
 	if len(validation.Plan.Methods.Enabled) != 2 {
 		t.Fatalf("expected enabled methods, got %#v", validation.Plan.Methods.Enabled)
+	}
+}
+
+func TestValidateIndexPlanAcceptsLifecycleMethods(t *testing.T) {
+	root := t.TempDir()
+	planPath := filepath.Join(root, "aascribe.index.toml")
+	mustWriteFile(t, planPath, `
+version = "index-plan-v1"
+
+[methods]
+enabled = ["builtin.run-context.v1", "builtin.run-report.v1"]
+`)
+
+	validation, err := ValidateIndexPlanFile(planPath)
+	if err != nil {
+		t.Fatalf("expected valid lifecycle plan, got %v", err)
+	}
+	if len(validation.Plan.Methods.Enabled) != 2 {
+		t.Fatalf("expected lifecycle methods, got %#v", validation.Plan.Methods.Enabled)
 	}
 }
 

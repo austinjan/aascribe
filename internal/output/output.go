@@ -14,9 +14,10 @@ import (
 )
 
 type CommandResult struct {
-	Data           any
-	Text           string
-	PrimaryTextKey string
+	Data              any
+	Text              string
+	PrimaryTextKey    string
+	JSONTransportText string
 }
 
 type Meta struct {
@@ -61,7 +62,11 @@ func WriteSuccess(w io.Writer, format cli.Format, quiet bool, result *CommandRes
 	textOut := result.Text
 	if result.PrimaryTextKey != "" && meta.Store != "" {
 		cfg := largeoutput.DefaultConfig()
-		delivered, err := largeoutput.Deliver(meta.Store, meta.Command, result.Text, largeoutput.DeliverOptions{Config: cfg})
+		transportText := result.Text
+		if format == cli.FormatJSON && result.JSONTransportText != "" {
+			transportText = result.JSONTransportText
+		}
+		delivered, err := largeoutput.Deliver(meta.Store, meta.Command, transportText, largeoutput.DeliverOptions{Config: cfg})
 		if err != nil {
 			return err
 		}
@@ -799,8 +804,8 @@ func decorateData(data any, primaryTextKey string, delivered *largeoutput.Delive
 	payload, ok := data.(map[string]any)
 	if !ok {
 		return map[string]any{
-			"value":     data,
-			"transport": transport,
+			primaryTextKey: delivered.InlineText,
+			"transport":    transport,
 		}
 	}
 	cloned := make(map[string]any, len(payload)+1)
