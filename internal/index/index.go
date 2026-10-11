@@ -20,7 +20,7 @@ import (
 	"github.com/austinjan/aascribe/internal/apperr"
 )
 
-var defaultExcludes = []string{".git", "node_modules", "target", "dist", ".venv", metadataFilename}
+var defaultExcludes = []string{".git", "node_modules", "target", "dist", ".venv", metadataFilename, metadataFilename + "*.tmp"}
 
 const metadataFilename = ".aascribe_index_meta.json"
 
@@ -33,6 +33,7 @@ type Options struct {
 	MaxConcurrency      int
 	Refresh             bool
 	NoSummary           bool
+	RejectSymlinks      bool
 	MaxFileSize         int64
 	Summarizer          SummarizerFunc
 	FailureThreshold    int
@@ -563,6 +564,9 @@ func buildDir(absPath, displayPath string, depth int, opts Options, matcher matc
 			return IndexedPathNode{}, err
 		}
 		name := entry.Name()
+		if opts.RejectSymlinks && entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
 		childDisplay := filepath.ToSlash(filepath.Join(displayPath, name))
 		if localMatcher.skip(name, childDisplay, entry.IsDir()) {
 			continue
@@ -1275,9 +1279,18 @@ func writeMetadata(root string, metadata *Metadata) error {
 	}
 
 	target := filepath.Join(root, metadataFilename)
-	temp := target + ".tmp"
-	if err := os.WriteFile(temp, content, 0o644); err != nil {
+	file, err := os.CreateTemp(root, metadataFilename+"-*.tmp")
+	if err != nil {
+		return apperr.IOError("Failed to create temporary index metadata.")
+	}
+	temp := file.Name()
+	defer os.Remove(temp)
+	if _, err := file.Write(content); err != nil {
+		file.Close()
 		return apperr.IOError("Failed to write index metadata: %s.", temp)
+	}
+	if err := file.Close(); err != nil {
+		return apperr.IOError("Failed to close index metadata: %s.", temp)
 	}
 	if err := os.Rename(temp, target); err != nil {
 		return apperr.IOError("Failed to finalize index metadata: %s.", target)

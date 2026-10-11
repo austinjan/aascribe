@@ -5,11 +5,15 @@ GO ?= go
 
 CURRENT_BINARY := $(DIST_DIR)/$(APP_NAME)
 
-.PHONY: all release clean
+.PHONY: all mcp release clean
 
 all:
 	mkdir -p $(DIST_DIR)
 	$(GO) build -trimpath -ldflags="-s -w" -o $(CURRENT_BINARY) $(CMD_PATH)
+
+mcp:
+	mkdir -p $(DIST_DIR)
+	$(GO) build -trimpath -ldflags="-s -w" -o $(DIST_DIR)/aascribe-mcp ./cmd/aascribe-mcp
 
 release:
 	mkdir -p $(DIST_DIR)

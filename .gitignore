@@ -21,9 +21,12 @@ cover.out
 # Workspace-local app data
 /data/
 /target/
+.aascribe_index_meta.json
+.aascribe_index_meta.json-*.tmp
 
 # Dependency/vendor directories when used locally
 /vendor/
+node_modules/
 
 # Editor and OS files
 .DS_Store

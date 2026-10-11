@@ -7,6 +7,8 @@ Related docs:
 
 Complete command and flag reference for `aascribe`.
 
+Remote single-project Q&A uses a separate executable, `aascribe-mcp --root <published-project>`, exposing the authenticated Streamable HTTP `/mcp` endpoint with `ask_project` and `index_project`. A server-side pi agent searches and reads indexed sources and returns an answer with relative paths, line ranges, and verified SHA-256 hashes. `index_project` creates or updates only the server-configured root, then loads the updated catalog immediately without restarting. An unindexed project can start the server; call `index_project` before asking questions. This does not change the local CLI's existing `recall` implementation status. Installation, flags, client examples, limits, and dynamic-IP deployment are documented in [remote-mcp.zh-TW.md](remote-mcp.zh-TW.md).
+
 - [Global flags](#global-flags)
 - [Time format](#time-format)
 - [Output envelope](#output-envelope)

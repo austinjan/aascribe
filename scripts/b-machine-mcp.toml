@@ -1,0 +1,8 @@
+# Merge into B's Codex config.toml. Set AASCRIBE_MCP_TOKEN securely on B
+# before starting the agent. This file intentionally contains no credential.
+[mcp_servers.aascribe]
+url = "https://condimental-knurliest-dagny.ngrok-free.dev/mcp"
+bearer_token_env_var = "AASCRIBE_MCP_TOKEN"
+startup_timeout_sec = 20
+tool_timeout_sec = 110
+enabled_tools = ["index_project", "ask_project"]
