@@ -192,11 +192,23 @@ func (r *Runner) Ask(parent context.Context, question string) (*Answer, error) {
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = time.Second
 	if err := cmd.Run(); err != nil {
+		for _, line := range strings.Split(string(stderr.Bytes()), "\n") {
+			var diagnostic struct {
+				Diagnostic string   `json:"diagnostic"`
+				Turn       int      `json:"turn"`
+				Tokens     int      `json:"tokens"`
+				Labels     []string `json:"labels"`
+			}
+			if json.Unmarshal([]byte(line), &diagnostic) == nil && diagnostic.Diagnostic == "model_failure" {
+				slog.Warn("pi model failure", "turn", diagnostic.Turn, "tokens", diagnostic.Tokens, "labels", diagnostic.Labels)
+			}
+		}
 		slog.Warn("pi query failed", "duration_ms", time.Since(started).Milliseconds(), "timed_out_or_canceled", ctx.Err() != nil)
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("project query canceled or timed out: %w", ctx.Err())
 		}
-		switch diagnostic := strings.TrimSpace(string(stderr.Bytes())); diagnostic {
+		lines := strings.Split(strings.TrimSpace(string(stderr.Bytes())), "\n")
+		switch diagnostic := lines[len(lines)-1]; diagnostic {
 		case "pi token budget exceeded", "pi model turn budget exceeded", "pi model request failed", "pi returned invalid answer JSON", "pi returned an invalid answer shape", "pi returned an invalid citation", "pi answered without source citations":
 			return nil, fmt.Errorf("%s", diagnostic)
 		}

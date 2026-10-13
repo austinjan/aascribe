@@ -245,6 +245,6 @@ Remove-Item Env:AASCRIBE_LIVE_PI_TEST
 
 ### 此 A 的部署狀態與 B 設定
 
-已啟動 A 的背景 MCP 與 ngrok，固定端點為 `https://condimental-knurliest-dagny.ngrok-free.dev/mcp`。公開初始化、工具發現、索引更新，以及缺少或錯誤 Bearer 回傳 401 已驗證。2026-10-13 公開完整流程重測成功：index_project 更新 85 個來源，接著 ask_project 透過 Codex 訂閱回答 README 用途，附行號及 SHA-256；2 次模型請求、1,606 tokens。本機訂閱問答也曾成功。較複雜的 index_project 實作問答仍回傳 pi model request failed，因此尚未完成所有問答情境驗證。未從 B 實機測試。
+已啟動 A 的背景 MCP 與 ngrok，固定端點為 `https://condimental-knurliest-dagny.ngrok-free.dev/mcp`。公開初始化、工具發現、索引更新，以及缺少或錯誤 Bearer 回傳 401 已驗證。2026-10-13 公開完整流程重測成功：index_project 更新 85 個來源，接著 ask_project 透過 Codex 訂閱回答 README 用途，附行號及 SHA-256；2 次模型請求、1,606 tokens。本機訂閱問答也曾成功。較複雜的 index_project 實作問答已重現根因：第 9 次請求超過 8 輪上限，原錯誤處理將其遮蔽為通用模型錯誤。修正為最後一輪停用工具並整理答案後，同一公開問題成功：8 輪、45,912 tokens、9 個經行號及 SHA-256 驗證的引用。仍保留 8 輪及 60,000 tokens 上限，不保證所有問題皆能在額度內完成。未從 B 實機測試。
 
 B 使用 Codex 時，將 `scripts/b-machine-mcp.toml` 合併到 B 的 `~/.codex/config.toml`，在 B 安全設定 `AASCRIBE_MCP_TOKEN` 後啟動 agent。只能交付 MCP Bearer，不能交付 ngrok 或 Codex 憑證。先請 agent 呼叫 `index_project`，再呼叫 `ask_project`。A 重開機後需先執行 `scripts/start-mcp.ps1`，再以相同固定網址執行 `scripts/start-ngrok.ps1 -PublicUrl https://condimental-knurliest-dagny.ngrok-free.dev`。
