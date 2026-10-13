@@ -175,7 +175,7 @@ Cloudflared 主動連往 Cloudflare，不需要路由器 port forwarding，也�
 
 每個問題只有一個獨立 Node 子程序與記憶體內的 pi session；不沿用其他問題的聊天歷史，不載入 project/global 的 skills、extensions、context files 或 shell 工具。pi 僅使用 Go bridge 提供的 `knowledge_list`、`knowledge_search`、`knowledge_read`。來源讀取使用 Go `os.Root` 限制在發布 root，並核對索引中的 SHA-256。
 
-每次最多 8 個模型請求、每次模型輸出最多 4,096 tokens、24 次知識工具呼叫、128 KiB 序列化工具上下文、60,000 provider-reported 累積 tokens。Token 上限在每次模型回應後檢查，因此最後一個回應可以超過門檻；這不是供應商帳單的硬額度。請另設模型帳戶的費用限制。
+模型請求沒有固定輪數上限，也不強制最後一輪停用工具。每次模型輸出最多 4,096 tokens、24 次知識工具呼叫、128 KiB 序列化工具上下文、60,000 provider-reported 累積 tokens。Token 上限在每次模型回應後檢查，因此最後一個回應可以超過門檻；這不是供應商帳單的硬額度。請另設模型帳戶的費用限制。
 
 回傳引用必須落在 pi 成功讀過的來源行範圍內，hash 由 Go 補上；回傳前再次確認來源未改變。這能阻止虛構路徑與未讀來源引用，但不能證明答案中的每一句推論都正確。
 
@@ -245,6 +245,6 @@ Remove-Item Env:AASCRIBE_LIVE_PI_TEST
 
 ### 此 A 的部署狀態與 B 設定
 
-已啟動 A 的背景 MCP 與 ngrok，固定端點為 `https://condimental-knurliest-dagny.ngrok-free.dev/mcp`。公開初始化、工具發現、索引更新，以及缺少或錯誤 Bearer 回傳 401 已驗證。2026-10-13 公開完整流程重測成功：index_project 更新 85 個來源，接著 ask_project 透過 Codex 訂閱回答 README 用途，附行號及 SHA-256；2 次模型請求、1,606 tokens。本機訂閱問答也曾成功。較複雜的 index_project 實作問答已重現根因：第 9 次請求超過 8 輪上限，原錯誤處理將其遮蔽為通用模型錯誤。修正為最後一輪停用工具並整理答案後，同一公開問題成功：8 輪、45,912 tokens、9 個經行號及 SHA-256 驗證的引用。仍保留 8 輪及 60,000 tokens 上限，不保證所有問題皆能在額度內完成。未從 B 實機測試。
+已啟動 A 的背景 MCP 與 ngrok，固定端點為 `https://condimental-knurliest-dagny.ngrok-free.dev/mcp`。公開初始化、工具發現、索引更新，以及缺少或錯誤 Bearer 回傳 401 已驗證。2026-10-13 公開完整流程重測成功：index_project 更新 85 個來源，接著 ask_project 透過 Codex 訂閱回答 README 用途，附行號及 SHA-256；2 次模型請求、1,606 tokens。本機訂閱問答也曾成功。較複雜的 index_project 實作問答已重現根因：第 9 次請求超過 8 輪上限，原錯誤處理將其遮蔽為通用模型錯誤。修正為最後一輪停用工具並整理答案後，同一公開問題成功：8 輪、45,912 tokens、9 個經行號及 SHA-256 驗證的引用。後續依使用者要求移除固定輪數上限與第 8 輪強制收尾；仍保留 token、工具上下文與逾時控制。未從 B 實機測試。
 
 B 使用 Codex 時，將 `scripts/b-machine-mcp.toml` 合併到 B 的 `~/.codex/config.toml`，在 B 安全設定 `AASCRIBE_MCP_TOKEN` 後啟動 agent。只能交付 MCP Bearer，不能交付 ngrok 或 Codex 憑證。先請 agent 呼叫 `index_project`，再呼叫 `ask_project`。A 重開機後需先執行 `scripts/start-mcp.ps1`，再以相同固定網址執行 `scripts/start-ngrok.ps1 -PublicUrl https://condimental-knurliest-dagny.ngrok-free.dev`。
